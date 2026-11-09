@@ -16,17 +16,20 @@ def unlock(dest, passphrase):
     env = {**os.environ, "TIFXYZ_PW": passphrase}
     with open(ARCHIVE, "rb") as source:
         openssl = subprocess.Popen(["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "600000", "-pass", "env:TIFXYZ_PW"],
-                                   stdin=source, stdout=subprocess.PIPE, env=env)
-        tar = subprocess.Popen(["tar", "-xf", "-", "-C", dest, "--no-same-owner"], stdin=openssl.stdout)
+                                   stdin=source, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
+        tar = subprocess.Popen(["tar", "-xf", "-", "-C", dest, "--no-same-owner"], stdin=openssl.stdout, stderr=subprocess.DEVNULL)
         openssl.stdout.close()
         tar_rc, openssl_rc = tar.wait(), openssl.wait()
     if tar_rc or openssl_rc:
-        raise SystemExit("decryption failed (wrong passphrase?)")
+        raise ValueError("decryption failed (wrong passphrase?)")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dest", default=os.path.dirname(HERE))
     args = parser.parse_args()
-    unlock(args.dest, os.getenv("TIFXYZ_PASSPHRASE") or getpass.getpass("tifxyz passphrase: "))
+    try:
+        unlock(args.dest, os.getenv("TIFXYZ_PASSPHRASE") or getpass.getpass("tifxyz passphrase: "))
+    except ValueError as exc:
+        raise SystemExit(str(exc))
     print(f"extracted into {os.path.join(args.dest, 'tifxyz')}")

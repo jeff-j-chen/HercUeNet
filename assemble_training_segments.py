@@ -15,6 +15,10 @@ depth-13 alias (symlinked zarr/mask/label/train mask, flat surface, norm, surfac
 5 held-out PHerc0846A evaluation segments (EVAL_0846A: straightened2 out_4/out_5 and 3 quick patches, the latter rendered
 like extras: uint8, mask under masks/extras, no alias); a plain run assembles them, --mix28 does not.
 
+PHerc0846A sheets whose mesh is not in tifxyz/ come from the passphrase-protected utils/tifxyz_0846A.tar.enc (utils/unlock_tifxyz_0846A.py):
+the run prompts for the passphrase (or reads $TIFXYZ_PASSPHRASE); a wrong or empty answer skips those sheets and assembles everything
+else (--mix28 then stops short of finalizing the corpus).
+
 per fragment, in order (each step skips if its output already exists):
     1. download or assemble the surface volume -> ves_zarrs2/<id>.zarr + masks/<id>.png
     2. verify the required labels exist and match the zarr/mask XY dimensions
@@ -2044,6 +2048,69 @@ def process_fragment(name, seg, zid, workers, skip_norm, skip_surface, chunk_dep
         return (name, f"FAIL: {e}")
 
 
+def _mesh_0846a(name):
+    """the tifxyz mesh folder of a PHerc0846A sheet, or None for any other fragment."""
+    if name in MESHES_0846A:
+        return MESHES_0846A[name][2]
+    if name in EVAL_MESHES_0846A:
+        return EVAL_MESHES_0846A[name][1]
+    if name in EVAL_QUICK_0846A:
+        return f"quick_patches_from_D/PHerc0846A/{name}"
+    if name in (*EVAL_PRIZE_OLD, *EVAL_PRIZE_V3):
+        return name
+    return None
+
+
+def unlock_0846a_meshes(segs, root=os.path.dirname(os.path.abspath(__file__)), zarr_dir=None, tries=3):
+    """PHerc0846A sheets whose mesh is not in tifxyz/ (and whose render is not assembled yet) come from the passphrase-protected
+    utils/tifxyz_0846A.tar.enc. Ask for the passphrase (TIFXYZ_PASSPHRASE, else up to `tries` prompts; empty skips) and extract it.
+    Returns (segs to assemble, names skipped)."""
+    import getpass
+
+    zarr_dir = ZARR_DIR if zarr_dir is None else zarr_dir
+
+    def needs_mesh(name, zid):
+        mesh = _mesh_0846a(name)
+        if mesh is None or os.path.isfile(os.path.join(root, "tifxyz", mesh, "x.tif")):
+            return False
+        rendered = os.path.isdir(os.path.join(zarr_dir, f"{zid}.zarr"))
+        masked = any(os.path.exists(os.path.join(root, "masks", *sub, f"{zid}.png")) for sub in ((), ("extras",)))
+        return not (rendered and masked)
+
+    missing = [name for name, _seg, zid in segs if needs_mesh(name, zid)]
+    if not missing:
+        return segs, []
+    print(f"[0846A] {len(missing)} sheet(s) need meshes that are not in tifxyz/: {missing}", flush=True)
+    from utils import unlock_tifxyz_0846A as vault
+
+    unlocked = False
+    if not os.path.isfile(vault.ARCHIVE):
+        print(f"[0846A] {vault.ARCHIVE} not found")
+    else:
+        env_passphrase = os.getenv("TIFXYZ_PASSPHRASE")
+        for _attempt in range(1 if env_passphrase else tries):
+            if env_passphrase:
+                passphrase = env_passphrase
+            elif sys.stdin.isatty():
+                passphrase = getpass.getpass("[0846A] passphrase for the PHerc0846A meshes (empty to skip them): ")
+            else:
+                break
+            if not passphrase:
+                break
+            try:
+                vault.unlock(root, passphrase)
+                unlocked = True
+                break
+            except ValueError as exc:
+                print(f"[0846A] {exc}", flush=True)
+    if unlocked:
+        missing = [name for name, _seg, zid in segs if needs_mesh(name, zid)]
+        print("[0846A] meshes unlocked" + (f"; still missing: {missing}" if missing else ""), flush=True)
+    if missing:
+        print(f"[0846A] skipping {len(missing)} PHerc0846A sheet(s); everything else is assembled", flush=True)
+    return [s for s in segs if s[0] not in missing], missing
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", type=str, default=None)
@@ -2151,6 +2218,8 @@ def main():
         names = [s[0] for s in SEGMENTS]
         segs = SEGMENTS[names.index(args.from_name):]
 
+    segs, locked = unlock_0846a_meshes(segs)
+
     global R2_BASE
     if not args.no_r2 and any(name in RESCAN_88KEV for name, _seg, _zid in segs):
         try:
@@ -2208,6 +2277,10 @@ def main():
         failed = [nm for nm, status in results if not status.startswith("OK")] + broken
         if failed:
             sys.exit(f"[mix28] not finalized, fragments failed: {failed}")
+        if locked:
+            print(f"[mix28] {len(locked)} PHerc0846A sheet(s) skipped (no passphrase), so the corpus is NOT finalized; "
+                  f"rerun with the passphrase: {locked}")
+            return
         # flat 1447 surfaces are written in step 4; anchors and the 3 depths of cues need every surface, so they come last
         mix6.finalize(workers=args.cue_workers, rebuild_cues=args.rebuild_cues)
         problems = mix6.report()
