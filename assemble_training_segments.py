@@ -1,0 +1,2220 @@
+"""assemble_training_segments.py -- download + assemble training segments.
+
+Most inputs are native 9.362um surfaces. Configured exceptions are resampled in XYZ:
+7.91um and 8.64um isotropic volumes are interpolated to the target grid, while 2.4um
+volumes use level-2 XY and pool 109 native depth samples to 28 output layers.
+
+PHerc1447 windings are assembled from the released 24-layer Hugging Face renders. Ids listed in
+depth_reversed.json are written directly in the reversed (canonical) depth order and carry
+attrs depth_flipped=true; there is no post-hoc flip.
+
+The 15 PHerc0846A sheets of MESHES_0846A (the 14 trained mix26 sheets and the fiber_only_20261102b_flatboi_PRIZESHEET prize sheet, the only
+prize sheet that is assembled) are rendered from their tifxyz meshes with assemble_test_segments.render_fragment (the
+fiber_only sheets like extras: uint8, mask under masks/extras linked into masks/; the prize sheet rotated 180 degrees) and get their flat
+depth-13 alias (symlinked zarr/mask/label/train mask, flat surface, norm, surface anchors) instead of steps 2-5. The same goes for the
+5 held-out PHerc0846A evaluation segments (EVAL_0846A: straightened2 out_4/out_5 and 3 quick patches, the latter rendered
+like extras: uint8, mask under masks/extras, no alias); a plain run assembles them, --mix28 does not.
+
+per fragment, in order (each step skips if its output already exists):
+    1. download or assemble the surface volume -> ves_zarrs2/<id>.zarr + masks/<id>.png
+    2. verify the required labels exist and match the zarr/mask XY dimensions
+    3. precompute normalization stats
+    4. precompute surface supervision under surface_labels/<id>/
+    5. fine scans resampled from 2.4/3.24 um (MATCHED_SIGMAS) only: degrade to the native 9.362 um / 113 keV
+       spectrum -> ves_zarrs2/<id>.matched.zarr, the volume training reads (data.zarr_suffix), plus its norm and
+       surface anchors. the PSF per fragment is pinned (MATCHED_SIGMAS) so every assembly is identical.
+
+usage:
+  python assemble_training_segments.py --mix28              # everything the mix28 trainings need, in one command (see below)
+  python assemble_training_segments.py --only w058          # one fragment (pilot)
+  python assemble_training_segments.py                       # all fragments
+  python assemble_training_segments.py --from w039           # resume from a fragment
+  python assemble_training_segments.py --skip-norm           # skip the (slow) norm precompute
+  python assemble_training_segments.py --skip-surface        # skip the surface supervision precompute
+  python assemble_training_segments.py --no-degrade          # skip step 5
+  python assemble_training_segments.py --no-r2 --only paris1_fr34   # re-render an 88 keV fragment from dl.ash2txt
+  python assemble_training_segments.py --spectral-match      # refit the step-5 PSFs against the native references
+  python assemble_training_segments.py --degrader models/c39_degrader.pth   # learned-degrader .translated siblings
+
+--mix28 (off by default) downloads and sets up exactly the 29 sheets / patches of the default corpus (utils/mix6.py): the 28 registered
+patches of mix28 (cue_dropout, reader-v3 and v8-in all train on it, so one command serves all three) plus the prize sheet. The 28:
+the 14 trained PHerc0846A sheets (7 auto_grown sheets + the 4 fiber_only_20261029d_flatboi neighbours, train only, plus
+fiber_only_abf2_20261029c_flatboi, its +28 voxel offset _p28 and PHerc0846A test surface 6 = 20260921094413) and the 14 donor patches:
+PHerc0009B (4 incl. p9b_592, p9b_642, p9b_639), PHerc1447 w060, PHerc0841 (2 incl. p841_w00), PHerc0172 w087, the PHerc0343 first letters,
+PHerc0139 w041, PHerc1667 w013 (fine scan, read as its .matched sibling), PHerc0500P2 500P2_m1/m2 and the PHerc0306B first-letters sheet
+p306b_letters (the 41-layer claim-surface render of Prodigle/pherc0306b-first-letters, downloaded from Hugging Face and resampled like an
+8.64 um surface volume). p9b_642, p9b_639 and p306b_letters are hand-labelled like the other donors (a donor without ink or without train mask is skipped by the
+trainings, utils/mix6.py is_labelled). The 29th is the prize sheet
+fiber_only_20261102b_flatboi_PRIZESHEET (rotated 180 degrees). (The earlier mix25 corpus also had the PHerc0814 patches and 0139 title;
+they stay assembled but are no longer set up.)
+Per scroll that is the volume + mask, norm, surface detection
+(PHerc1447: the flat surface at its measured centre layer; PHerc0846A: the flat depth-13 alias), surface anchors, the prize-sheet
+exclusions of the trained 0846A sheets (utils/holdout_exclusion.py) and the 3 depths of asf cues (cue_asf_morph, _dm1, _dp1; the
+prize sheet only the first; a trained 0846A sheet's cue is built without its prize-sheet zone).
+The evaluation-only renders (EVAL_0846A) are not part of it. Labels and train masks come from git. --check only reports what is
+missing (read-only). --only adds scrolls on top of the corpus (python assemble_training_segments.py --mix28 --only w058,w059).
+"""
+from __future__ import annotations
+import argparse, json, os, shutil, subprocess, sys, threading, time
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import cv2
+import numpy as np
+from PIL import Image
+Image.MAX_IMAGE_PIXELS = None
+
+BUCKET = "https://vesuvius-challenge-open-data.s3.amazonaws.com"
+# output zarr dir: honor $VESUVIUS_ZARR_PATH (same var config/precompute read); default is
+# /vesuvius/ves_zarrs2 on linux, the local documents path on windows.
+def _default_zarr_dir():
+    if os.name != "posix":
+        return r"C:\Users\ChenJeff\Documents\ves_zarrs2"
+    # distinguish desktop (external Seagate) from runpod
+    if os.path.exists("/media/jeff/Seagate/"):
+        return "/media/jeff/Seagate/ves_zarrs2"
+    return "/vesuvius/ves_zarrs2"
+ZARR_DIR = os.getenv("VESUVIUS_ZARR_PATH", _default_zarr_dir())
+TMP = "_ves_tmp"
+
+# constant across all PHerc0139 segments
+VOL9_NAME = "9.362um-1.2m-113keV-volume-20250728140407.zarr"
+
+# PHerc0846A (the submission scroll): the 14 trained mix26 sheets and the fiber_only_20261102b_flatboi_PRIZESHEET prize sheet (the only
+# prize sheet assembled), rendered from their tifxyz meshes (assemble_test_segments.render_fragment) and read through flat
+# depth-13 aliases (assemble_test_segments.make_flat_alias).
+# name (utils/mix6.py SHEETS_0846A / HOLDOUT_NAME) -> (render zarr id, flat alias, mesh under tifxyz/)
+VOL_0846A = (f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0", "14019,7726,7726")
+MESHES_0846A = {
+    "auto_grown_20260927134928530_abf": (
+        "20260927134928", "20260927134931", "quick_patches_from_D/PHerc0846A/auto_grown_20260927134928530_abf"),
+    "auto_grown_20261012073244544_abf": ("20261012073244", "20261012073246", "3_new/auto_grown_20261012073244544_abf"),
+    # the straight mesh moved -28 voxels along the render normal (old/offset_mesh.py)
+    "auto_grown_20261012065803387_straight_abf_m28": (
+        "20261012065812", "20261012065813", "auto_grown_20261012065803387_straight_abf_m28"),
+    # neighbor sheets of straightened2: in_1 one sheet the other way, out_N N sheets away
+    **{f"auto_grown_20261012065803387_straightened2_abf_{suffix}": (
+        render, alias, f"auto_grown_20261012065803387_straightened2_abf_{suffix}")
+       for suffix, render, alias in (
+           ("in_1", "20261012065816", "20261012065817"), ("out_1", "20261012065818", "20261012065819"),
+           ("out_2", "20261012065820", "20261012065821"), ("out_3", "20261012065822", "20261012065823"))},
+    # the PRIZE sheet (2026-11-06 PRIZESHEET_NEW, the extension of the previous prize sheet): the only prize sheet that is assembled, never
+    # trained or validated on. It renders like assemble_test_segments extras (zarr id = mesh name, uint8, mask under masks/extras linked
+    # into masks/ for the alias). Its mesh grid is the previous prize sheet's turned 180 degrees, so it is upright without ROTATE_180.
+    # The previous prize sheet is kept as an evaluation render (EVAL_PRIZE_OLD)
+    "PRIZESHEET_NEW": ("PRIZESHEET_NEW", "20261106120000", "PRIZESHEET_NEW"),
+    # the 4 fibre neighbour sheets of straightened2 / fiber_only_20261029d_flatboi (train only), rendered as extras like the prize sheet
+    **{f"fiber_only_20261029d_flatboi_{suffix}": (
+        f"fiber_only_20261029d_flatboi_{suffix}", alias, f"fiber_only_20261029d_flatboi_{suffix}")
+       for suffix, alias in (("in_1", "20261029120001"), ("out_1", "20261029120002"), ("in_2", "20261029120003"),
+                             ("out_2", "20261029120004"))},
+    # mix26 additions (2026-11-02), train only: the abf2 fibre-only sheet (extras-style render, unrotated), the same sheet moved +28
+    # voxels along its normal (old/offset_mesh.py), and PHerc0846A test surface 6 (a plain uint16 render, mask in masks/)
+    "fiber_only_abf2_20261029c_flatboi": (
+        "fiber_only_abf2_20261029c_flatboi", "20261029130001", "fiber_only_abf2_20261029c_flatboi"),
+    "fiber_only_abf2_20261029c_flatboi_p28": (
+        "fiber_only_abf2_20261029c_flatboi_p28", "20261029130002", "fiber_only_abf2_20261029c_flatboi_p28"),
+    "auto_grown_20260921094413486_flatboi": ("20260921094413", "20260921094415", "auto_grown_20260921094413486_flatboi"),
+}
+EXTRAS_0846A = {name for name in MESHES_0846A if name.startswith("fiber_only_")} | {"PRIZESHEET_NEW"}
+FRAGMENTS_0846A = [(render, mesh, *VOL_0846A) for render, _alias, mesh in MESHES_0846A.values()]
+FLAT_ALIASES_0846A = {render: alias for render, alias, _mesh in MESHES_0846A.values()}
+# PHerc0846A held-out evaluation segments of 0846A_eval.ipynb (HOLDOUT_NAMES there), never trained on; assembled by a plain run, not by --mix28.
+# straightened2 out_4 / out_5: name -> (render zarr id, mesh under tifxyz/), flat alias from assemble_test_segments.FLAT_ALIASES
+EVAL_MESHES_0846A = {
+    f"auto_grown_20261012065803387_straightened2_abf_{suffix}": (render, f"auto_grown_20261012065803387_straightened2_abf_{suffix}")
+    for suffix, render in (("out_4", "20261012065824"), ("out_5", "20261012065826"))
+}
+# quick patches render like assemble_test_segments extras: zarr id = mesh folder name, uint8, mask under masks/extras
+EVAL_QUICK_0846A = ("auto_grown_20260926074031926_abf", "auto_grown_20260927143929299_abf", "auto_grown_20260927154033403_abf")
+# the previous prize sheet (fiber_only_20261102b_flatboi_PRIZESHEET, rotated 180 degrees at render time): an extras-style evaluation render of
+# tifxyz/<name>, kept for comparison; no longer the prize sheet, so no exclusion, flat alias or corpus uses it
+EVAL_PRIZE_OLD = ("fiber_only_20261102b_flatboi_PRIZESHEET",)
+# a later remake of the prize sheet (2026-11-09, same orientation as PRIZESHEET_NEW), an extras-style evaluation render without flat alias
+EVAL_PRIZE_V3 = ("PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi",)
+EVAL_0846A = (*EVAL_MESHES_0846A, *EVAL_QUICK_0846A, *EVAL_PRIZE_OLD, *EVAL_PRIZE_V3)
+
+# (name, segment_prefix, zarr_id)
+SEGMENTS = [
+    # original 4 training fragments. their dilated labels + masks are already final,
+    # so skip_labels=True keeps those and only (re)fetches the surface volume + norm.
+    # w056 was mesh-rendered (not a pre-rendered surface-volume) -- its zarr already
+    # exists so step1 skips; a fresh repro of w056 needs old/render_9um_surface.py.
+    ("w044", "PHerc0139/segments/20260115000000-w044_2026011522", "20260115000000"),
+    ("w059", "PHerc0139/segments/20250223000000-w059_2025022312", "20250223000000"),
+    ("w047", "PHerc0139/segments/20260206000001-w047_2026020613", "20260206000001"),
+    ("w056", "PHerc0139/segments/20260115000001-w056_2026011514", "20260115000001"),
+    # 10 new training fragments (2026-07-21)
+    ("w058", "PHerc0139/segments/20260210000000-w058_2026021020", "20260210000000"),
+    ("w052", "PHerc0139/segments/20260227000000-w052_2026022705", "20260227000000"),
+    ("w049", "PHerc0139/segments/20260318000000-w049_20260318",   "20260318000000"),
+    ("w046", "PHerc0139/segments/20260325000000-w046_20260325",   "20260325000000"),
+    ("w041", "PHerc0139/segments/20260108000000-w041_2026010816", "20260108000000"),
+    ("w040", "PHerc0139/segments/20250831000000-w040_2025083102", "20250831000000"),
+    ("w039", "PHerc0139/segments/20260302000000-w039_2026030210", "20260302000000"),
+    ("w038", "PHerc0139/segments/20260306000000-w038_2026030608", "20260306000000"),
+    ("w037", "PHerc0139/segments/20260310000000-w037_2026031015", "20260310000000"),
+    ("w034", "PHerc0139/segments/20260303000000-w034_2026030317", "20260303000000"),
+    # PHerc0139 w035 (2026-08-12). inklabels downloaded via download_w035_labels.py.
+    ("w035", "PHerc0139/segments/20260317000000-w035_2026031718", "20260317000000"),
+    # PHerc0139 segments with official researcher ink labels (2026-09-18 release)
+    ("w030", "PHerc0139/segments/20250108000005-w030_2025010818", "20250108000005"),
+    ("w043", "PHerc0139/segments/20260112000000-w043_2026011217", "20260112000000"),
+    ("w045", "PHerc0139/segments/20260126000000-w045_2026012619", "20260126000000"),
+    # HOLDOUT sanity fragment -- assembled but NOT added to DEFAULT_SCROLLS. exclusive
+    # hallucination check: if inference on w055 doesn't match its 1.1um text, we hallucinated.
+    ("w055", "PHerc0139/segments/20251226000000-w055_2025122611", "20251226000000"),
+    # PHerc0814 segment (2026-07-22). DIFFERENT scroll -> different surface-volume name
+    # (raw vol 20250804134230, see FRAG_OPTS['vol9_name']). only mask + dilated label exist
+    # (no non-dilated 1um ink), so skip_labels keeps those and just fetches the zarr + norm.
+    ("seg46527", "PHerc0814/segments/20260226000000-46527_2um_try2", "20260226000000"),
+    # PHerc0500P2 front segment (2026-08-07). DIFFERENT scroll, same resolution/energy as
+    # PHerc0139 (9.362um/113keV/1.2m). crystal-clear 2.215um inklabels available, making
+    # this a high-quality training fragment from a new scroll domain.
+    ("500P2_front", "PHerc0500P2/segments/20250628074500-500P2_front", "20250628074500"),
+    # PHerc1667 w013 (2026-08-13). assembled by the special level-2 path below (surface zarr
+    # at 2.399um, z-pooled 109->28 layers, left 25% crop). shape: (28, 10400, 4975) ~9.6um.
+    ("w013", "PHerc1667/segments/20240304141531-w013_20240304141531_flatboi", "20240304141531"),
+    # PHerc0172 / Scroll 5: native 7.91um volumes resampled in XYZ to the 28-layer 9.362um frame.
+    ("w087", "PHerc0172/segments/20251112000002-w087_20251112000002214_flatboi", "20251112000002"),
+    ("w068", "PHerc0172/segments/20251111010954-w068_20251111010954408_flatboi", "20251111010954"),
+    # PHerc1667 w018: full 2.399um flattening, using level 2 at 9.596um in XY.
+    ("w018", "PHerc1667/segments/20240304144031-w018_20240304144031_flatboi", "20240304144031"),
+    # PHerc0009B: native 8.64um volumes resampled in XYZ to the training frame.
+    ("p9b_487", "PHerc0009B/segments/20250919125754-auto_grown_20250919055754487_inp_hr", "20250919125754"),
+    # PHerc1447 fine-tune windings: released 24-layer native 8.64um renders from Hugging Face.
+    # Synthetic ids keep them distinct from PHerc0139's w058 and future campaign ids.
+    ("ph1447_w058", "", "20260930144758"),
+    ("ph1447_w060", "", "20260930144760"),
+    ("ph1447_w062", "", "20260930144762"),
+    # PHercParis4: level-2 XY is 9.6um; pool 109 source depths to 28.
+    ("paris4", "PHercParis4/segments/20231210121321", "20231210121321"),
+    # dl.ash2txt fragments: native 3.24um surface TIFF stacks resampled in XYZ.
+    ("paris2_fr143", "", "20230301213755"),
+    ("paris2_fr47", "", "20230205142449"),
+    ("scroll6_fr8", "", "20231205222200"),
+    ("paris1_fr34", "", "20230301213423"),
+    ("p343", "PHerc0343P/segments/20250511003658-tifxyz", "20250511003658"),
+    ("cr1fr3", "", "20231201215900"),
+    ("p841", "PHerc0841/segments/20260221022814-auto_grown_20260220174252405", "20260221022814"),
+    # PHerc0343 First Letters segment (Nieuwlaar/pherc343-first-letters): tifxyz mesh rendered from the raw volume
+    ("p343_letters", "", "20261007000000"),
+    # 2026-10-28 additions; all but p343_4b2 have hand-drawn labels + train masks (2026-10-29) and train in mix25 (utils/mix6.py)
+    ("500P2_m1", "PHerc0500P2/segments/20250825181859--1", "20250825181859"),
+    ("500P2_m2", "PHerc0500P2/segments/20250825181917--2", "20250825181917"),
+    ("p343_4b2", "PHerc0343P/segments/20250902170441--4_b2", "20250902170441"),
+    ("p9b_592", "PHerc0009B/segments/20250919132115-auto_grown_20250919062115592_inp_hr", "20250919132115"),
+    ("p841_w00", "PHerc0841/segments/20260220213127-w00", "20260220213127"),
+    ("p9b_642", "PHerc0009B/segments/20250919130642-auto_grown_20250919060642061", "20250919130642"),
+    ("p9b_639", "PHerc0009B/segments/20250510172639", "20250510172639"),
+    # PHerc0306B first-letters sheet (2026-11-04): the claim-surface render of Prodigle/pherc0306b-first-letters (Hugging Face)
+    ("p306b_letters", "", "20261104000001"),
+    ("seg0814_459", "PHerc0814/segments/20250925222237-auto_grown_20250925222237459", "20250925222237"),
+    ("title", "PHerc0139/segments/20260422000000-title_2026042222_zmid_flatboi", "20260422000000"),
+    *((name, "", render) for name, (render, _alias, _mesh) in MESHES_0846A.items()),
+    *((name, "", render) for name, (render, _mesh) in EVAL_MESHES_0846A.items()),
+    *((name, "", name) for name in EVAL_QUICK_0846A),
+    *((name, "", name) for name in (*EVAL_PRIZE_OLD, *EVAL_PRIZE_V3)),
+]
+
+# per-fragment behaviour overrides. skip_labels=True skips the dilated label check
+# (for fragments whose labels are already verified present and final).
+FRAG_OPTS = {
+    "w044": {"skip_labels": True},
+    "w059": {"skip_labels": True},
+    "w047": {"skip_labels": True},
+    "w056": {"skip_labels": True},
+    "w055": {"holdout": True},
+    # PHerc0814: its surface volume is a different raw scan than the PHerc0139 constant,
+    # and its labels are already final (dilated only), so keep them and only fetch the zarr.
+    "seg46527": {"skip_labels": True,
+                 "vol9_name": "9.362um-1.2m-113keV-volume-20250804134230.zarr"},
+    # PHerc0500P2: different raw volume name from PHerc0139 constant.
+    # inklabels will be generated separately (download_p500p2_labels.py) from the
+    # 2.215um ink detection TIF and saved to inklabels/ and dilated_inklabels/.
+    "500P2_front": {"vol9_name": "9.362um-1.2m-113keV-volume-20250820143440.zarr"},
+    # PHerc1667 w013: assembled via a dedicated script (pre-rendered level-2 surface zarr,
+    # z-pooled to 28 layers). skip_labels=True because inklabels are generated by that script.
+    "w013": {"skip_labels": True, "w013_special": True},
+    "w087": {
+        "vol9_name": "7.91um-53keV-volume-20241024131838.zarr",
+        "resample_um": 7.91,
+        "force_norm": True,
+    },
+    "w068": {
+        "vol9_name": "7.91um-53keV-volume-20241024131838.zarr",
+        "resample_um": 7.91,
+        "force_norm": True,
+    },
+    "w018": {
+        "pooled_special": True,
+        "surface_name": "2.399um-0.22m-78keV-volume-20251217075048.zarr",
+        "surface_level": 2,
+        "surface_expected_shape": (109, 10595, 24525),
+        "output_dtype": "|u1",
+        "force_norm": True,
+    },
+    "p9b_487": {
+        "vol9_name": "8.64um-1.2m-116keV-volume-20250521125136.zarr",
+        "resample_um": 8.64,
+        "force_norm": True,
+    },
+    "ph1447_w058": {
+        "hf_pherc1447": "w058",
+        "required_label_dirs": ("inklabels", "dilated_inklabels"),
+        "flat_surface": True,
+        "force_norm": True,
+    },
+    "ph1447_w060": {
+        "hf_pherc1447": "w060",
+        "required_label_dirs": ("inklabels", "dilated_inklabels"),
+        "flat_surface": True,
+        "force_norm": True,
+    },
+    "ph1447_w062": {
+        "hf_pherc1447": "w062",
+        "required_label_dirs": ("inklabels", "dilated_inklabels"),
+        "pseudo_label_from_prediction": "loo_w062.png",
+        "force_norm": True,
+    },
+    "paris4": {
+        "pooled_special": True,
+        "surface_name": "2.4um-0.22m-78keV-volume-20260411134726.zarr",
+        "surface_level": 2,
+        "surface_expected_shape": (109, 12750, 9995),
+        "force_norm": True,
+    },
+    # the four fragments below are rendered from their 88 keV scan (see RESCAN_88KEV / utils/fragment_rescan.py)
+    "paris2_fr143": {
+        "dlash_surface_base": "https://dl.ash2txt.org/fragments/Frag2/PHercParis2Fr143.volpkg/working/54keV_exposed_surface",
+        "surface_expected_shape": (65, 14830, 9506),
+        "source_um": 3.24,
+        "force_norm": True,
+    },
+    # id = uuid of the 54 keV volume the exposed surface was traced on
+    "paris2_fr47": {
+        "dlash_surface_base": "https://dl.ash2txt.org/fragments/Frag1/PHercParis2Fr47.volpkg/working/54keV_exposed_surface",
+        "surface_expected_shape": (65, 8181, 6330),
+        "source_um": 3.24,
+        "force_norm": True,
+    },
+    "scroll6_fr8": {
+        "dlash_surface_base": "https://dl.ash2txt.org/fragments/Frag6/PHerc51Cr4Fr8.volpkg/working/PHerc0051Cr04Fr08_53keV_3.24um/surface_processing",
+        "surface_expected_shape": (65, 8853, 6205),
+        "source_um": 3.24,
+        "force_norm": True,
+    },
+    "paris1_fr34": {
+        "dlash_surface_base": "https://dl.ash2txt.org/fragments/Frag3/PHercParis1Fr34.volpkg/working/54keV_exposed_surface",
+        "surface_expected_shape": (65, 7606, 5249),
+        "source_um": 3.24,
+        "force_norm": True,
+    },
+    "p343": {
+        "vol9_name": "8.64um-1.2m-116keV-volume-20250521134555.zarr",
+        "resample_um": 8.64,
+        "surface_expected_shape": (31, 3440, 2060),
+        "force_norm": True,
+    },
+    "cr1fr3": {
+        "dlash_surface_base": "https://dl.ash2txt.org/fragments/Frag5/PHerc1667Cr1Fr3.volpkg/working/PHerc1667Cr01Fr03_70keV_3.24um/surface_processing",
+        "surface_expected_shape": (65, 7309, 4560),
+        "source_um": 3.24,
+        "force_norm": True,
+    },
+    "p841": {
+        "cropped_surface_url": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0841/segments/20260221022814-auto_grown_20260220174252405/surface-volumes/9.366um-1.2m-113keV-volume-20250821151531.zarr/0",
+        # re-cropped upstream 2026-09-22; equals old frame rows 3144:6904, cols 0:4900 (labels cropped to match)
+        "surface_expected_shape": (28, 3760, 4900),
+        "surface_crop": (0, 3760, 0, 4900),
+        "force_norm": True,
+    },
+    "500P2_m1": {"vol9_name": "9.362um-1.2m-113keV-volume-20250820143440.zarr"},
+    "500P2_m2": {"vol9_name": "9.362um-1.2m-113keV-volume-20250820143440.zarr"},
+    "p343_4b2": {
+        "vol9_name": "8.64um-1.2m-116keV-volume-20250521134555.zarr",
+        "resample_um": 8.64,
+        "force_norm": True,
+    },
+    "p9b_592": {
+        "vol9_name": "8.64um-1.2m-116keV-volume-20250521125136.zarr",
+        "resample_um": 8.64,
+        "force_norm": True,
+    },
+    # 2026-11-04 mix28 additions (labels and train masks come from git)
+    "p9b_642": {"vol9_name": "8.64um-1.2m-116keV-volume-20250521125136.zarr", "resample_um": 8.64, "force_norm": True, "skip_labels": True},
+    "p9b_639": {"vol9_name": "8.64um-1.2m-116keV-volume-20250521125136.zarr", "resample_um": 8.64, "force_norm": True, "skip_labels": True},
+    # the 41-layer render (layer 20 = the surface, 1 voxel = 8.64 um, scan 20250521133212, 116 keV) of the claim surface
+    # PHerc0306B_20250521133212_w074own_touchup_V5Rc, level 0 of the zarr: (41, 4900, 7780) uint8
+    "p306b_letters": {
+        "hf_render": {"repo": "Prodigle/pherc0306b-first-letters", "path": "results/claim_surface_render_41layers.zarr"},
+        "surface_expected_shape": (41, 4900, 7780),
+        "resample_um": 8.64,
+        "force_norm": True,
+        "skip_labels": True,
+    },
+    # 9.366um, copied without resampling like p841
+    "p841_w00": {"vol9_name": "9.366um-1.2m-113keV-volume-20250821151531.zarr"},
+    "seg0814_459": {"vol9_name": "9.362um-1.2m-113keV-volume-20250804134230.zarr"},
+    "p343_letters": {
+        "tifxyz_mesh": {
+            "base_url": "https://raw.githubusercontent.com/Nieuwlaar/pherc343-first-letters/"
+                        "e8370f1f88a211166056df62ea6fcfffe4a1063e/outputs/concat_w047-w048_R5B2_z9500-11000.tifxyz",
+            "sha256": {
+                "meta.json": "76dce1781a09108632d15711bc75f43ad963aeddf22b1426954b160638f87e7e",
+                "x.tif": "8f31c8d7bc79ef79a39677274f0f80cbcc4066b5c92b8aa47e8b938b1f9d1fc4",
+                "y.tif": "7d4161972cb7e90a0d6d8203040c2e515ce6fb29c172091b21facace315545fc",
+                "z.tif": "04feacf27806f6653d85bb10b53068f0c37cecea209dc739a3b8b3b5c4363c65",
+            },
+            "mesh_dir": "tifxyz/concat_w047-w048_R5B2_z9500-11000",
+            "volume_url": f"{BUCKET}/PHerc0343/volumes/20250521140437-8.640um-1.2m-116keV-masked.zarr/0",
+            "volume_shape": (17998, 8595, 8595),
+        },
+        "resample_um": 8.64,
+        "force_norm": True,
+    },
+}
+
+# default source for these dl.ash2txt fragments: the 88 keV scan, sampled through the low-energy exposed-surface
+# PPM (<dlash_surface_base>/result.ppm) into the same frame as the old surface-tiff assembly. affine = fitted
+# low-energy voxel xyz -> 88 keV voxel xyz (3x4; no published registration). tif_url rebuilds chunks that are
+# missing from the published 88 keV zarr. offset_field (optional) = smooth residual after the affine, float32
+# (gh, gw, 3) xyz in 88 keV voxels at output pixels (i*64, j*64). an existing zarr without the rescan marker is
+# superseded.
+_DLASH = "https://dl.ash2txt.org/fragments"
+RESCAN_88KEV = {
+    "paris1_fr34": {
+        "volume_url": f"{_DLASH}/Frag3/PHercParis1Fr34.volpkg/volumes_zarr/88keV_3.24um_.zarr/0",
+        "tif_url": f"{_DLASH}/Frag3/PHercParis1Fr34.volpkg/volumes/20230212182547",
+        "tif_digits": 4,
+        "affine": [[1.00028, 0.00101, -0.00023, -72.77],
+                   [0.00012, 1.00301, 0.00016, 7.97],
+                   [0.00003, 0.00060, 0.99997, -4.65]],
+    },
+    "scroll6_fr8": {
+        "volume_url": f"{_DLASH}/Frag6/PHerc51Cr4Fr8.volpkg/volumes_zarr/88keV_3.24um_.zarr/0",
+        "tif_url": f"{_DLASH}/Frag6/PHerc51Cr4Fr8.volpkg/volumes/20231201112849",
+        "tif_digits": 4,
+        "affine": [[1.00056, 0.00038, -0.00008, -1.52646],
+                   [-0.00008, 0.99994, 0.00144, -0.32086],
+                   [-0.00001, -0.00145, 1.00063, -0.61886]],
+    },
+    "paris2_fr143": {
+        "volume_url": f"{_DLASH}/Frag2/PHercParis2Fr143.volpkg/volumes_zarr/88keV_3.24um_.zarr/0",
+        "tif_url": f"{_DLASH}/Frag2/PHercParis2Fr143.volpkg/volumes/20230226143835",
+        "tif_digits": 5,
+        "affine": [[1.00019, 0.00239, -0.00006, 15.74067],
+                   [-0.00062, 0.99700, 0.00027, -211.31795],
+                   [-0.00006, 0.00182, 0.99952, 4.91978]],
+        # Fr143 deformed between scans (affine residuals up to ~10 voxels)
+        "offset_field": "rescan_fields/20230301213755.npy",
+    },
+    "paris2_fr47": {
+        "volume_url": f"{_DLASH}/Frag1/PHercParis2Fr47.volpkg/volumes_zarr/88keV_3.24um_.zarr/0",
+        "tif_url": f"{_DLASH}/Frag1/PHercParis2Fr47.volpkg/volumes/20230213100222",
+        "tif_digits": 4,
+        "affine": [[1.00032, -0.00001, 0.00011, 150.21086],
+                   [-0.00067, 1.00025, 0.00029, 251.15753],
+                   [0.00000, -0.00015, 0.99998, 6.11317]],
+    },
+}
+RESCAN_MARKER = "rescan_88kev"
+# plan R (crossres/PLAN.md 0.7): fragments whose local zarr is a clean downscaling of a finer scan (2.4 um
+# pooled, 3.24 um resampled); --degrader writes a translated sibling <id>.translated.zarr for each
+TRANSLATE_NAMES = ("w013", "w018", "cr1fr3", "paris4", "paris2_fr143", "paris2_fr47", "scroll6_fr8", "paris1_fr34")
+# depth slices the surface search scans (generate_surface_supervision.py --z-start/--z-end); default (4, 28)
+SURFACE_Z_RANGE = {
+    **{name: (3, 25) for name in ("paris2_fr143", "paris2_fr47", "scroll6_fr8", "paris1_fr34", "cr1fr3")},
+    **{name: (4, 25) for name in ("ph1447_w058", "ph1447_w060", "ph1447_w062")},
+}
+# gaussian PSF (sigma_xy, sigma_z) per fine scan for its default <id>.matched sibling: the values utils/spectral_match.py
+# fitted against the native references, pinned so every assembly degrades exactly like the reference training run
+MATCHED_SIGMAS = {
+    "w013": (0.75, 0.5), "w018": (0.75, 0.7), "cr1fr3": (0.9, 0.9), "paris4": (0.75, 0.5),
+    "paris2_fr143": (1.05, 1.1), "paris2_fr47": (1.05, 1.1), "scroll6_fr8": (0.9, 0.9), "paris1_fr34": (0.9, 1.1),
+}
+# pre-rendered RESCAN_88KEV archives (<zid>.tar.gz = <zid>.zarr/ + <zid>.png mask, listed in SHA256SUMS) under
+# $R2_PUBLIC_URL/<R2_PREFIX>/; the render from dl.ash2txt (~1 h, ~20 MB/s server) runs only with --no-r2
+R2_PREFIX = "fragments_88kev"
+R2_BASE = None
+# (access_key, secret_key) when R2_PUBLIC_URL is the private S3 endpoint and requests must be signed
+R2_AUTH = None
+
+
+def _r2_signed_headers(url, method="GET"):
+    """AWS SigV4 headers for an unsigned-payload request against the R2 S3 endpoint (region 'auto')."""
+    import datetime
+    import hashlib
+    import hmac
+    from urllib.parse import quote, urlsplit
+
+    parts = urlsplit(url)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    amz_date, day = now.strftime("%Y%m%dT%H%M%SZ"), now.strftime("%Y%m%d")
+    headers = {"host": parts.netloc, "x-amz-content-sha256": "UNSIGNED-PAYLOAD", "x-amz-date": amz_date}
+    signed = ";".join(sorted(headers))
+    canonical = "\n".join([
+        method, quote(parts.path, safe="/-_.~"), "",
+        "".join(f"{key}:{headers[key]}\n" for key in sorted(headers)), signed, "UNSIGNED-PAYLOAD",
+    ])
+    scope = f"{day}/auto/s3/aws4_request"
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+    key = f"AWS4{R2_AUTH[1]}".encode()
+    for part in (day, "auto", "s3", "aws4_request"):
+        key = hmac.new(key, part.encode(), hashlib.sha256).digest()
+    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+    headers["Authorization"] = (f"AWS4-HMAC-SHA256 Credential={R2_AUTH[0]}/{scope}, "
+                                f"SignedHeaders={signed}, Signature={signature}")
+    return headers
+
+
+def _r2_fetch(url, output=None, tries=5):
+    """GET an R2 object (signed when R2_AUTH is set); returns text, or streams to output."""
+    import urllib.error
+    import urllib.request
+
+    error = None
+    for attempt in range(tries):
+        try:
+            headers = _r2_signed_headers(url) if R2_AUTH else {}
+            headers.pop("host", None)
+            headers["User-Agent"] = R2_USER_AGENT
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=120) as response:
+                if output is None:
+                    return response.read().decode("utf-8")
+                with open(output, "wb") as handle:
+                    shutil.copyfileobj(response, handle, length=1 << 22)
+                return None
+        except urllib.error.HTTPError as exc:
+            error = f"HTTP {exc.code}: {exc.read()[:300].decode('utf-8', 'replace')}"
+            if exc.code in (400, 401, 403, 404):
+                break
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            error = str(exc)
+        time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"R2 GET {url} failed: {error}")
+
+
+def _r2_put(url, path, tries=3):
+    """upload a local file to R2 with a signed PUT (requires the private endpoint + key pair)."""
+    import urllib.error
+    import urllib.request
+
+    if not R2_AUTH:
+        raise RuntimeError("R2 uploads need the private R2 endpoint with ACCESS_KEY and SECRET_KEY")
+    size = os.path.getsize(path)
+    error = None
+    for attempt in range(tries):
+        try:
+            headers = _r2_signed_headers(url, method="PUT")
+            headers.pop("host", None)
+            headers["Content-Length"] = str(size)
+            with open(path, "rb") as handle:
+                request = urllib.request.Request(url, data=handle, headers=headers, method="PUT")
+                with urllib.request.urlopen(request, timeout=900) as response:
+                    response.read()
+            return
+        except urllib.error.HTTPError as exc:
+            error = f"HTTP {exc.code}: {exc.read()[:300].decode('utf-8', 'replace')}"
+            if exc.code in (400, 401, 403, 404):
+                break
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            error = str(exc)
+        time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"R2 PUT {url} failed: {error}")
+
+
+DEFAULT_R2_PUBLIC_URL = "https://pub-ae80fe7f9acf4b90962bbde50cfdce8a.r2.dev"
+# Cloudflare answers the default Python-urllib User-Agent with 403 (error 1010)
+R2_USER_AGENT = "vesuvius-assemble/1.0"
+
+
+def configure_r2():
+    """set R2_AUTH from the environment and return the bucket root url (R2_PUBLIC_URL, else the public default)."""
+    global R2_AUTH
+    public = (os.getenv("R2_PUBLIC_URL", "").strip() or DEFAULT_R2_PUBLIC_URL).rstrip("/")
+    if not public:
+        raise ValueError("R2_PUBLIC_URL must be set (e.g. https://pub-<hash>.r2.dev)")
+    if public.endswith(".r2.cloudflarestorage.com"):
+        # private S3 endpoint: path-style bucket, SigV4-signed with the R2 access key pair
+        access, secret = os.getenv("ACCESS_KEY", "").strip(), os.getenv("SECRET_KEY", "").strip()
+        if not access or not secret:
+            raise ValueError("R2_PUBLIC_URL is the private R2 endpoint; export ACCESS_KEY and SECRET_KEY "
+                             "(or use the bucket's public r2.dev URL)")
+        R2_AUTH = (access, secret)
+        public = f"{public}/{os.getenv('R2_BUCKET', 'ves').strip()}"
+    return public
+
+TARGET_VOXEL_UM = 9.362
+TARGET_DEPTH = 28
+HF_DATASET_REPO = "YoussefMoNader/ink-8um-pherc1447-surfaces"
+PHERC1447_SOURCE_UM = 8.64
+
+# PHerc1667 w013 is a pre-rendered 2.399um volume. Level 2 is ~9.596um in XY;
+# pooling 109 source depths to 28 gives ~9.34um in Z. Only the left 25% is useful.
+W013_SURF_BASE = (
+    f"{BUCKET}/PHerc1667/segments/20240304141531-w013_20240304141531_flatboi/"
+    "surface-volumes/2.399um-0.22m-78keV-volume-20251217075048.zarr"
+)
+W013_SURF_LEVEL = 2
+W013_SOURCE_SHAPE = (109, 10400, 19900)
+W013_OUTPUT_SHAPE = (28, 10400, 4975)
+
+CHUNK_XY = 128     # S3 surface volume source chunks are 128x128
+
+# OUTPUT zarr chunks optimized for arbitrary 192px contexts and 8-slice windows
+DEFAULT_CHUNK_DEPTH = 8   # matches 8-slice depth windows in triple mode
+DEFAULT_CHUNK_Y = 64      # balances arbitrary 192px context reads and chunk over-read
+DEFAULT_CHUNK_X = 64
+
+
+def run(cmd):
+    print(f"  $ {' '.join(cmd)}", flush=True)
+    r = subprocess.run(cmd)
+    if r.returncode != 0:
+        raise RuntimeError(f"command failed ({r.returncode}): {' '.join(cmd)}")
+
+
+def _pbar(total, desc):
+    """progress reporter: a real tqdm bar if tqdm is importable, else periodic percent prints.
+    returns (update, close) callables so the caller doesn't care which backend is used."""
+    try:
+        from tqdm import tqdm
+        bar = tqdm(total=total, desc=f"[dl] {desc}", unit="it")
+        return (lambda n=1: bar.update(n)), bar.close
+    except Exception:
+        st = {"n": 0}
+        step = max(1, total // 10)
+        def upd(n=1):
+            st["n"] += n
+            if st["n"] % step == 0 or st["n"] >= total:
+                print(f"[dl] {desc} {st['n']}/{total}", flush=True)
+        return upd, (lambda: None)
+
+
+def _get_json(url):
+    r = subprocess.run(["curl", "-s", "--fail", "--max-time", "60", url], capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"failed to fetch {url}")
+    return json.loads(r.stdout.decode("utf-8"))
+
+
+def _curl_code(url, out, tries=3):
+    """curl one url -> out, returning the HTTP status code as a string. retries TRANSIENT
+    failures (5xx / timeout / connection reset) with backoff, but never retries a 404, and
+    leaves NO file behind on any non-200 (removes 404 error-xml / partial bodies). this
+    http-code-aware classification is what stops a transient failure from being silently
+    treated as an 'air' (blank) chunk -- the bug that corrupted the aria2c/runpod volumes."""
+    code = "000"
+    for _i in range(max(1, tries)):
+        r = subprocess.run(
+            ["curl", "-s", "--connect-timeout", "20", "--max-time", "120",
+             "-o", out, "-w", "%{http_code}", url], capture_output=True)
+        code = (r.stdout.decode("utf-8", "ignore").strip() or "000")[-3:]
+        if code == "200":
+            return code
+        if os.path.exists(out):
+            try: os.remove(out)
+            except OSError: pass
+        if code == "404":
+            return code
+        time.sleep(1)                 # transient -> brief backoff, then retry
+    return code
+
+
+def _fetch_chunk(args):
+    """download one chunk. 200 -> data file; 404 -> zero-byte air sentinel; any OTHER failure
+    -> NO file left, so _verify_repair re-checks/aborts instead of silently blanking it."""
+    base, level, yc, xc, cache_dir = args
+    out = os.path.join(cache_dir, f"{level}_{yc}_{xc}.raw")
+    if os.path.exists(out):
+        return (yc, xc, "cached")
+    code = _curl_code(f"{base}/{level}/0/{yc}/{xc}", out)
+    if code == "200":
+        return (yc, xc, "ok")
+    if code == "404":
+        open(out, "wb").close()       # confirmed air
+        return (yc, xc, "air")
+    return (yc, xc, "fail")           # transient -> leave missing for _verify_repair
+
+
+def _load_chunk(cache_dir, level, yc, xc, D):
+    p = os.path.join(cache_dir, f"{level}_{yc}_{xc}.raw")
+    try:
+        if os.path.getsize(p) == D * CHUNK_XY * CHUNK_XY:
+            return np.frombuffer(open(p, "rb").read(), dtype=np.uint8).reshape(D, CHUNK_XY, CHUNK_XY)
+    except Exception:
+        pass
+    return None
+
+
+def _aria2_fetch(base, level, jobs, cache_dir, workers):
+    """bulk-download all not-yet-cached chunks with ONE aria2c process (fast, connection reuse).
+    aria2c CANNOT distinguish a 404 from a transient failure, so it writes NO air sentinels here
+    -- _verify_repair afterwards http-code-classifies everything aria2c left missing. returns
+    (success_bool, elapsed_seconds)."""
+    if shutil.which("aria2c") is None:
+        return False, 0
+    todo = [(f"{base}/{level}/0/{yc}/{xc}", f"{level}_{yc}_{xc}.raw")
+            for (_b, _lvl, yc, xc, _cd) in jobs
+            if not os.path.exists(os.path.join(cache_dir, f"{level}_{yc}_{xc}.raw"))]
+    if not todo:
+        return True, 0
+    listfile = os.path.join(cache_dir, "_aria2_urls.txt")
+    with open(listfile, "w") as f:
+        for url, name in todo:
+            f.write(f"{url}\n  dir={cache_dir}\n  out={name}\n")
+    j = max(1, min(int(workers), 64))
+    print(f"[dl] aria2c: bulk-fetching {len(todo)} chunks with -j{j} (missing chunks verified below)...", flush=True)
+    t0 = time.time()
+    subprocess.run(
+        ["aria2c", "-i", listfile, f"-j{j}", "-x1", "-s1",
+         "--max-tries=2", "--retry-wait=1", "--connect-timeout=20", "--timeout=120",
+         "--auto-file-renaming=false", "--allow-overwrite=true",
+         "-q", "--download-result=hide"],
+        check=False)
+    elapsed = time.time() - t0
+    try:
+        os.remove(listfile)
+    except OSError:
+        pass
+    return True, elapsed
+
+
+def _verify_repair(base, level, jobs, cache_dir, D, workers):
+    """CORRECTNESS GATE. verify every expected chunk is EITHER a correctly-sized data file OR a
+    confirmed-404 air chunk (zero-byte sentinel). anything missing or wrong-sized is re-fetched
+    with an http-code-aware curl and classified 200->data / 404->air / else->hard failure. raises
+    RuntimeError if any chunk cannot be resolved -- we refuse to assemble a silently-blanked
+    volume (better to fail loudly and retry than train on corrupt data). returns (data, air)."""
+    expected = D * CHUNK_XY * CHUNK_XY
+    need = []
+    data_n = air_n = 0
+    for (_b, _lvl, yc, xc, _cd) in jobs:
+        p = os.path.join(cache_dir, f"{level}_{yc}_{xc}.raw")
+        if os.path.exists(p):
+            sz = os.path.getsize(p)
+            if sz == expected:
+                data_n += 1; continue          # valid data
+            if sz == 0:
+                air_n += 1; continue           # confirmed-404 air sentinel
+            try: os.remove(p)                  # partial/corrupt -> re-fetch
+            except OSError: pass
+        need.append((yc, xc))
+    if need:
+        print(f"[dl] verify: re-checking {len(need)} missing/partial chunk(s) with http-code...", flush=True)
+        def _chk(coord):
+            yc, xc = coord
+            p = os.path.join(cache_dir, f"{level}_{yc}_{xc}.raw")
+            code = _curl_code(f"{base}/{level}/0/{yc}/{xc}", p, tries=4)
+            if code == "200" and os.path.exists(p) and os.path.getsize(p) == expected:
+                return (coord, "data")
+            if code == "404":
+                open(p, "wb").close()
+                return (coord, "air")
+            return (coord, f"ERR:{code}")
+        results = {}
+        with ThreadPoolExecutor(max_workers=max(1, min(int(workers), 32))) as ex:
+            for coord, status in ex.map(_chk, need):
+                results[coord] = status
+        errs = [(c, s) for c, s in results.items() if s.startswith("ERR")]
+        if errs:
+            raise RuntimeError(
+                f"[dl] {len(errs)} chunk(s) failed to download for a NON-404 reason, e.g. {errs[:5]}. "
+                f"refusing to assemble a blanked volume -- re-run to retry (S3 may be rate-limiting).")
+        data_n += sum(1 for s in results.values() if s == "data")
+        air_n += sum(1 for s in results.values() if s == "air")
+    return data_n, air_n
+
+
+def _download_surface_zarr(base, level, out_zarr, out_id, workers, cache_dir, chunk_depth, chunk_y, chunk_x):
+    """download a pre-rendered OME-Zarr surface volume from S3 -> local zarr + mask png.
+    these segment surface-volumes are ALREADY flattened (no mesh sampling needed), stored as
+    OME-Zarr: a group with pyramid levels 0..5, each an array with chunks [D,128,128], uint8,
+    NO compressor, dimension_separator "/". a chunk lives at  {base}.zarr/{level}/{zc}/{yc}/{xc}.
+    the chunk depth == full D, so zc is always 0; missing chunk (404) = all-air background."""
+    base = base.rstrip("/")
+    za = _get_json(f"{base}/{level}/.zarray")
+    D, H, W = za["shape"]
+    print(f"[dl] level {level} shape (D,H,W)=({D},{H},{W}) dtype={za['dtype']}")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    n_yc = (H + CHUNK_XY - 1) // CHUNK_XY
+    n_xc = (W + CHUNK_XY - 1) // CHUNK_XY
+    jobs = [(base, level, yc, xc, cache_dir) for yc in range(n_yc) for xc in range(n_xc)]
+    print(f"[dl] fetching {len(jobs)} chunks ({n_yc}x{n_xc}) with {workers} workers "
+          f"(~{len(jobs) * D * CHUNK_XY * CHUNK_XY / 1e9:.1f} GB max)")
+    
+    # fast path: single aria2c process (connection reuse). falls back to per-chunk curl if absent.
+    used_aria2, aria2_time = _aria2_fetch(base, level, jobs, cache_dir, workers)
+    if used_aria2 and aria2_time > 0:
+        print(f"[dl] aria2c completed in {aria2_time:.1f}s ({aria2_time/60:.1f}m)", flush=True)
+    
+    if not used_aria2:
+        done = 0
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for _ in ex.map(_fetch_chunk, jobs):
+                done += 1
+                if done % 500 == 0:
+                    print(f"[dl] fetched {done}/{len(jobs)}", flush=True)
+    
+    # CORRECTNESS GATE: verify every chunk is valid data or a confirmed-404 air chunk, re-fetching
+    # anything missing/partial and ABORTING on a non-404 failure. this is what stops a transient
+    # download error from being silently baked into the volume as a blank region.
+    data_n, air_n = _verify_repair(base, level, jobs, cache_dir, D, workers)
+    print(f"[dl] all {len(jobs)} chunks verified: {data_n} data + {air_n} air (blank)", flush=True)
+
+    # write zarr directly from cache chunks (avoids ~2GB intermediate array).
+    # writing full-z columns means each zarr z-chunk gets all its data in one shot,
+    # eliminating the read-modify-write that layer-by-layer writes cause (~7x redundant
+    # reads per z-chunk group). columns are disjoint in zarr chunk space and mask space,
+    # so parallel writes are safe with DirectoryStore (one file per chunk, no shared state).
+    import zarr
+    store = zarr.open(out_zarr, mode="w", shape=(D, H, W), 
+                      chunks=(min(chunk_depth, D), chunk_y, chunk_x),
+                      dtype="<u2", compressor=None, zarr_format=2)
+    mask_buf = np.zeros((H, W), dtype=np.uint8)
+
+    def _write_col(yx):
+        yc, xc = yx
+        ch = _load_chunk(cache_dir, level, yc, xc, D)
+        y0, x0 = yc * CHUNK_XY, xc * CHUNK_XY
+        y1, x1 = min(y0 + CHUNK_XY, H), min(x0 + CHUNK_XY, W)
+        if ch is None:
+            return
+        data = ch[:, :y1-y0, :x1-x0]
+        store[:, y0:y1, x0:x1] = data.astype(np.uint16)
+        mask_buf[y0:y1, x0:x1] = (data.max(axis=0) > 0).astype(np.uint8) * 255
+
+    pairs = [(yc, xc) for yc in range(n_yc) for xc in range(n_xc)]
+    upd, close = _pbar(len(pairs), "writing zarr")
+    # 32 threads is a practical sweet spot: more causes small-file write contention
+    with ThreadPoolExecutor(max_workers=min(workers, 32)) as ex:
+        for _ in ex.map(_write_col, pairs):
+            upd()
+    close()
+    print(f"[dl] wrote zarr {out_zarr} ({D},{H},{W}) uint16")
+
+    # mask = footprint where ANY layer is nonzero (valid rendered surface)
+    os.makedirs("masks", exist_ok=True)
+    Image.fromarray(mask_buf).save(f"masks/{out_id}.png")
+    print(f"[dl] wrote masks/{out_id}.png  valid_frac={(mask_buf > 0).mean():.3f}")
+
+
+def _verify_zarr_integrity(zarr_path, zid):
+    """post-download integrity check: verify all depth slices have valid (non-zero) data.
+    raises RuntimeError if the volume appears corrupted/incomplete (e.g., only first few
+    slices downloaded, rest are zeros). this catches the bug that corrupted w044/w034."""
+    import zarr
+    print(f"[verify] checking zarr integrity: {zarr_path}", flush=True)
+    try:
+        z = zarr.open(zarr_path, mode='r')
+        D, H, W = z.shape
+        
+        # check every depth slice for valid data (sample a stripe across middle)
+        valid_depths = []
+        for d in range(D):
+            # sample every 100th pixel across middle row to avoid loading full slice
+            sample = z[d, H//2, ::100]
+            if sample.mean() > 0 and len(np.unique(sample)) > 1:
+                valid_depths.append(d)
+        
+        valid_count = len(valid_depths)
+        coverage = valid_count / D if D > 0 else 0
+        
+        print(f"[verify] {zid}: {valid_count}/{D} depths have valid data ({coverage*100:.1f}%)")
+        
+        # require at least 90% depth coverage (allow a few air slices at edges)
+        if coverage < 0.90:
+            missing = sorted(set(range(D)) - set(valid_depths))
+            raise RuntimeError(
+                f"INTEGRITY CHECK FAILED: {zid} has only {valid_count}/{D} valid depths "
+                f"({coverage*100:.1f}% coverage). Missing/zero depths: {missing[:10]}{'...' if len(missing) > 10 else ''}. "
+                f"This indicates an incomplete download. Delete {zarr_path} and re-run to retry.")
+        
+        # check spatial coverage on middle depth slice
+        mid_d = D // 2
+        if mid_d in valid_depths:
+            # sample 10x10 regions at 5 locations
+            regions = [
+                z[mid_d, H//4:H//4+10, W//4:W//4+10],
+                z[mid_d, H//4:H//4+10, 3*W//4:3*W//4+10],
+                z[mid_d, H//2:H//2+10, W//2:W//2+10],
+                z[mid_d, 3*H//4:3*H//4+10, W//4:W//4+10],
+                z[mid_d, 3*H//4:3*H//4+10, 3*W//4:3*W//4+10],
+            ]
+            nonzero_regions = sum(1 for r in regions if r.mean() > 0)
+            if nonzero_regions == 0:
+                raise RuntimeError(
+                    f"INTEGRITY CHECK FAILED: {zid} depth {mid_d} has no valid data in sampled regions. "
+                    f"Volume may be corrupted. Delete {zarr_path} and re-run.")
+        
+        print(f"[verify] ✓ {zid} integrity check passed", flush=True)
+        
+    except Exception as e:
+        if "INTEGRITY CHECK FAILED" in str(e):
+            raise
+        raise RuntimeError(f"Failed to verify zarr integrity for {zid}: {e}")
+
+
+SWEEP_GRID = 16           # NxN probe grid across the frame
+SWEEP_MIN_COVERAGE = 0.5  # min fraction of mask-valid probes that must carry data
+
+
+def _zarr_integrity(zid, mask_dir="masks", grid=SWEEP_GRID, min_coverage=SWEEP_MIN_COVERAGE):
+    """cheap spatial integrity check for one scroll's on-disk zarr. samples an NxN grid of
+    depth-columns across the frame and verifies the zarr carries data wherever the mask says
+    the surface is valid. a partial/interrupted write covers only a sliver of its mask (e.g.
+    w044/w047 were ~7%); a middle-row-only check misses this. returns (ok: bool, msg: str)."""
+    import zarr
+    zpath = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    if not os.path.isdir(zpath):
+        return False, "MISSING zarr"
+    try:
+        z = zarr.open(zpath, mode="r")
+        D, H, W = map(int, z.shape)
+    except Exception as e:
+        return False, f"UNREADABLE ({type(e).__name__})"
+    mpath = os.path.join(mask_dir, f"{zid}.png")
+    if not os.path.exists(mpath):
+        return False, "MISSING mask"
+    m = np.array(Image.open(mpath).convert("L"))
+    hh, ww = min(H, m.shape[0]), min(W, m.shape[1])
+    ys = np.linspace(0, hh - 1, grid).astype(int)
+    xs = np.linspace(0, ww - 1, grid).astype(int)
+    valid = have = 0
+    for y in ys:
+        for x in xs:
+            if m[y, x] > 0:                       # mask claims valid surface here
+                valid += 1
+                if bool((np.asarray(z[:, y, x]) > 0).any()):   # any depth carries data
+                    have += 1
+    if valid == 0:
+        return False, "MASK_EMPTY"
+    cov = have / valid
+    mb_frac = float((m > 0).mean()) * 100
+    if cov < min_coverage:
+        return False, f"DATA_UNDERFILL cov={cov:.2f} (mask={mb_frac:.0f}% valid)"
+    return True, f"cov={cov:.2f}"
+
+
+def _pool_w013_depth(volume, layers_out):
+    """area-average a w013 row strip from 109 source depths to 28 output depths."""
+    depth = int(volume.shape[0])
+    out = np.zeros((layers_out, volume.shape[1], volume.shape[2]), dtype=np.float32)
+    for index in range(layers_out):
+        start = int(round(index * depth / layers_out))
+        end = int(round((index + 1) * depth / layers_out))
+        out[index] = volume[start:end].mean(axis=0)
+    return out
+
+
+def _resample_depth_physical(volume, source_um, layers_out=TARGET_DEPTH):
+    """linearly sample source depths on a centered TARGET_VOXEL_UM grid."""
+    source_depth = int(volume.shape[0])
+    source_center = (source_depth - 1) / 2.0
+    output_center = (layers_out - 1) / 2.0
+    positions = source_center + (
+        np.arange(layers_out) - output_center
+    ) * TARGET_VOXEL_UM / float(source_um)
+    output = np.zeros((layers_out, volume.shape[1], volume.shape[2]), dtype=np.float32)
+    for output_depth, position in enumerate(positions):
+        if position < 0 or position > source_depth - 1:
+            continue
+        lower = int(np.floor(position))
+        upper = min(lower + 1, source_depth - 1)
+        fraction = float(position - lower)
+        output[output_depth] = volume[lower] * (1.0 - fraction)
+        if upper != lower:
+            output[output_depth] += volume[upper] * fraction
+    return output
+
+
+def _write_mask_from_midslice(output, mask_path):
+    """write the physical surface footprint from the output volume's middle slice."""
+    middle = np.asarray(output[int(output.shape[0]) // 2])
+    mask = (middle > 0).astype(np.uint8) * 255
+    os.makedirs(os.path.dirname(mask_path), exist_ok=True)
+    Image.fromarray(mask).save(mask_path)
+    print(f"  [mask] wrote {mask_path} from midslice valid_frac={(mask > 0).mean():.3f}")
+
+
+def _curl_range(url, start, end, output):
+    command = [
+        "curl", "-s", "--fail", "--connect-timeout", "20", "--max-time", "180",
+        "--retry", "3", "--retry-delay", "2", "--show-error",
+        "-r", f"{start}-{end}", "-o", output, url,
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        if os.path.exists(output):
+            os.remove(output)
+        detail = result.stderr.strip() or "no curl error text"
+        raise RuntimeError(
+            f"range download failed ({result.returncode}) for {url} "
+            f"bytes={start}-{end}: {detail}"
+        )
+
+
+def _fetch_dlash_band(args):
+    layer, url, start, end, output, rows, width = args
+    _curl_range(url, start, end, output)
+    band = np.fromfile(output, dtype="<u2")
+    if band.size != rows * width:
+        raise RuntimeError(f"layer {layer}: downloaded {band.size} pixels, expected {rows * width}")
+    return layer, band.reshape(rows, width)
+
+
+def _dlash_depth_positions(source_depth, source_um):
+    source_center = (source_depth - 1) / 2.0
+    output_center = (TARGET_DEPTH - 1) / 2.0
+    return source_center + (np.arange(TARGET_DEPTH) - output_center) * TARGET_VOXEL_UM / source_um
+
+
+def _download_once(url, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.isfile(path) and os.path.getsize(path) > 0:
+        return
+    run([
+        "curl", "-L", "--fail", "--retry", "5", "--retry-delay", "2",
+        "-o", path, url,
+    ])
+
+
+def _hf_cli():
+    for name in ("hf", "huggingface-cli"):
+        if shutil.which(name):
+            return name
+    raise RuntimeError("Hugging Face CLI not found; install `hf` to assemble the PHerc1447 windings")
+
+
+def _hf_download(local_dir, files, force=False, repo=HF_DATASET_REPO, include=()):
+    command = [_hf_cli(), "download", repo, *files, "--repo-type", "dataset", "--local-dir", local_dir]
+    for pattern in include:
+        command += ["--include", pattern]
+    if force:
+        command.append("--force-download")
+    run(command)
+
+
+def _pherc1447_output_shape(source_height, source_width):
+    return (
+        TARGET_DEPTH,
+        int(round(int(source_height) * PHERC1447_SOURCE_UM / TARGET_VOXEL_UM)),
+        int(round(int(source_width) * PHERC1447_SOURCE_UM / TARGET_VOXEL_UM)),
+    )
+
+
+def _write_resized_label(source_path, out_path, output_shape):
+    image = cv2.imread(source_path, cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise RuntimeError(f"failed to read label source {source_path}")
+    target_height, target_width = map(int, output_shape)
+    resized = cv2.resize(image, (target_width, target_height), interpolation=cv2.INTER_AREA)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    if not cv2.imwrite(out_path, resized):
+        raise RuntimeError(f"failed to write {out_path}")
+    print(f"  [label] wrote {out_path} shape={resized.shape} valid_frac={(resized > 0).mean():.3f}", flush=True)
+
+
+def _prepare_pherc1447_labels(name, zid, opts, force=False):
+    winding = str(opts["hf_pherc1447"])
+    cache_dir = os.path.join(TMP, "hf_pherc1447", winding)
+    label_dirs = tuple(opts.get("required_label_dirs", ()))
+    output_paths = [os.path.join(directory, f"{zid}.png") for directory in label_dirs]
+    if output_paths and not force and all(os.path.exists(path) for path in output_paths):
+        return
+
+    source_file = f"{winding}/labels/inklabels.png"
+    if opts.get("pseudo_label_from_prediction"):
+        source_file = f"{winding}/predictions/{opts['pseudo_label_from_prediction']}"
+    _hf_download(cache_dir, [source_file], force=force)
+    source_path = os.path.join(cache_dir, source_file)
+    source = cv2.imread(source_path, cv2.IMREAD_GRAYSCALE)
+    if source is None:
+        raise RuntimeError(f"{name}: failed to read downloaded source label {source_path}")
+    output_shape = _pherc1447_output_shape(source.shape[0], source.shape[1])[1:]
+    for out_path in output_paths:
+        _write_resized_label(source_path, out_path, output_shape)
+
+
+def _load_gray(path):
+    image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise RuntimeError(f"failed to read {path}")
+    return image
+
+
+def _check_png_xy(label, path, expected_shape):
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+    image = _load_gray(path)
+    if tuple(image.shape) != tuple(expected_shape):
+        raise RuntimeError(f"{label} shape {image.shape} != expected {expected_shape} at {path}")
+    return float((image > 0).mean())
+
+
+def _assemble_dlash_surface(name, zid, opts, workers, chunk_depth, chunk_y, chunk_x, force=False):
+    """stream a dl.ash2txt uint16 TIFF stack and resample it to the training voxel grid."""
+    import zarr
+
+    source_depth, source_height, source_width = map(int, opts["surface_expected_shape"])
+    source_um = float(opts["source_um"])
+    output_height = int(round(source_height * source_um / TARGET_VOXEL_UM))
+    output_width = int(round(source_width * source_um / TARGET_VOXEL_UM))
+    output_shape = (TARGET_DEPTH, output_height, output_width)
+    output_path = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    partial_path = output_path + ".partial"
+    cache_dir = os.path.join(TMP, f"dlash_{zid}")
+    progress_path = os.path.join(partial_path, ".assembly_progress.json")
+    mask_path = os.path.join("masks", f"{zid}.png")
+    if force:
+        shutil.rmtree(output_path, ignore_errors=True)
+        shutil.rmtree(partial_path, ignore_errors=True)
+        if os.path.exists(mask_path):
+            os.remove(mask_path)
+    if os.path.isdir(output_path):
+        print("  [1/3] dl.ash2txt volume exists -> skip")
+        return
+
+    os.makedirs(cache_dir, exist_ok=True)
+    row_height = 512
+    next_source_y = 0
+    output = None
+    if os.path.isdir(partial_path) and os.path.isfile(progress_path):
+        with open(progress_path, encoding="utf-8") as handle:
+            progress = json.load(handle)
+        if tuple(progress.get("output_shape", ())) == output_shape:
+            output = zarr.open(partial_path, mode="r+")
+            next_source_y = int(progress.get("next_source_y", 0))
+        else:
+            shutil.rmtree(partial_path)
+    if output is None:
+        shutil.rmtree(partial_path, ignore_errors=True)
+        output = zarr.open(
+            partial_path,
+            mode="w",
+            shape=output_shape,
+            chunks=(min(chunk_depth, TARGET_DEPTH), chunk_y, chunk_x),
+            dtype="<u2",
+            compressor=None,
+            zarr_format=2,
+        )
+
+    positions = _dlash_depth_positions(source_depth, source_um)
+    valid_depths = np.flatnonzero((positions >= 0) & (positions <= source_depth - 1))
+    base = opts["dlash_surface_base"].rstrip("/")
+    print(
+        f"  [1/3] dl.ash2txt resample {(source_depth, source_height, source_width)} "
+        f"@{source_um:.3f}um -> {output_shape} @{TARGET_VOXEL_UM:.3f}um; "
+        f"valid target depths={valid_depths[0]}..{valid_depths[-1]}"
+    )
+    for source_y0 in range(next_source_y, source_height, row_height):
+        source_y1 = min(source_y0 + row_height, source_height)
+        output_y0 = int(round(source_y0 * output_height / source_height))
+        output_y1 = int(round(source_y1 * output_height / source_height))
+        rows = source_y1 - source_y0
+        start = 8 + source_y0 * source_width * 2
+        end = 8 + source_y1 * source_width * 2 - 1
+        jobs = [
+            (
+                layer,
+                f"{base}/surface_volume/{layer:02d}.tif",
+                start,
+                end,
+                os.path.join(cache_dir, f"band_{layer:02d}.raw"),
+                rows,
+                source_width,
+            )
+            for layer in range(source_depth)
+        ]
+        source_band = np.empty((source_depth, rows, source_width), dtype=np.uint16)
+        with ProcessPoolExecutor(max_workers=max(1, min(int(workers), source_depth))) as executor:
+            for layer, band in executor.map(_fetch_dlash_band, jobs):
+                source_band[layer] = band
+        for output_z, position in enumerate(positions):
+            if position < 0 or position > source_depth - 1:
+                output[output_z, output_y0:output_y1, :] = 0
+                continue
+            lower = int(np.floor(position))
+            upper = min(lower + 1, source_depth - 1)
+            fraction = float(position - lower)
+            plane = source_band[lower].astype(np.float32)
+            if upper != lower:
+                plane *= 1.0 - fraction
+                plane += source_band[upper] * fraction
+            resized = cv2.resize(
+                plane,
+                (output_width, output_y1 - output_y0),
+                interpolation=cv2.INTER_AREA,
+            )
+            output[output_z, output_y0:output_y1, :] = np.clip(
+                np.rint(resized), 0, 65535
+            ).astype(np.uint16)
+        with open(progress_path, "w", encoding="utf-8") as handle:
+            json.dump({"output_shape": output_shape, "next_source_y": source_y1}, handle)
+        print(f"  [dlash] rows {source_y1}/{source_height}", flush=True)
+    del output
+    os.remove(progress_path)
+    os.replace(partial_path, output_path)
+    print(f"  [dlash] wrote {output_path} shape={output_shape}")
+
+
+def _is_rescan_zarr(path):
+    try:
+        with open(os.path.join(path, ".zattrs"), encoding="utf-8") as handle:
+            return RESCAN_MARKER in json.load(handle)
+    except (OSError, ValueError):
+        return False
+
+
+def _assemble_dlash_rescan(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=False):
+    """render the fragment from its 88 keV scan; atomically supersedes an older (low-energy) zarr + mask."""
+    from utils import fragment_rescan
+
+    rescan = RESCAN_88KEV[name]
+    output_path = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    partial_path = output_path + ".partial"
+    mask_path = os.path.join("masks", f"{zid}.png")
+    if os.path.isdir(output_path) and _is_rescan_zarr(output_path) and not force:
+        print("  [1/3] 88 keV rescan volume exists -> skip")
+        return
+    base = opts["dlash_surface_base"].rstrip("/")
+    cache_dir = os.path.join(TMP, f"rescan_{zid}")
+    source_depth, source_height, source_width = map(int, opts["surface_expected_shape"])
+    source_mask_path = os.path.join(cache_dir, "mask.png")
+    _download_once(f"{base}/mask.png", source_mask_path)
+    source_mask = cv2.imread(source_mask_path, cv2.IMREAD_GRAYSCALE)
+    if source_mask is None or source_mask.shape != (source_height, source_width):
+        raise RuntimeError(f"{name}: bad source mask {None if source_mask is None else source_mask.shape}")
+    frame = fragment_rescan.out_shape(source_height, source_width)
+    footprint = cv2.resize(source_mask, frame[::-1], interpolation=cv2.INTER_NEAREST) > 0
+    positions = _dlash_depth_positions(source_depth, float(opts["source_um"]))
+    empty_layers = [int(k) for k in np.flatnonzero((positions < 0) | (positions > source_depth - 1))]
+    print(f"  [1/3] 88 keV rescan -> {(TARGET_DEPTH,) + frame}; empty layers {empty_layers}", flush=True)
+    shutil.rmtree(partial_path, ignore_errors=True)
+    field = np.load(rescan["offset_field"]) if rescan.get("offset_field") else None
+    mask = fragment_rescan.render(
+        partial_path, f"{base}/result.ppm", rescan["volume_url"], rescan["affine"], cache_dir,
+        footprint=footprint, empty_layers=empty_layers, tif_url=rescan.get("tif_url"),
+        tif_digits=int(rescan.get("tif_digits", 4)), chunks=(min(chunk_depth, TARGET_DEPTH), chunk_y, chunk_x),
+        offset_field=field,
+    )
+    with open(os.path.join(partial_path, ".zattrs"), "w", encoding="utf-8") as handle:
+        json.dump({RESCAN_MARKER: {"volume_url": rescan["volume_url"], "affine": rescan["affine"],
+                                   "offset_field": rescan.get("offset_field"), "ppm": f"{base}/result.ppm"}},
+                  handle, indent=1)
+    if os.path.isdir(output_path):
+        print(f"  [1/3] superseding the existing zarr {output_path}")
+        shutil.rmtree(output_path)
+    os.replace(partial_path, output_path)
+    os.makedirs("masks", exist_ok=True)
+    cv2.imwrite(mask_path, mask.astype(np.uint8) * 255)
+    print(f"  [1/3] wrote {output_path} + {mask_path} (footprint {mask.mean():.3f}, "
+          f"{mask.sum() / max(footprint.sum(), 1):.4f} of the source mask)")
+    shutil.rmtree(os.path.join(cache_dir, "chunks"), ignore_errors=True)
+
+
+def _fetch_rescan_r2(name, zid, force=False):
+    """download + verify + unpack the pre-rendered 88 keV archive; supersedes an older zarr + mask."""
+    import hashlib
+    import tarfile
+
+    output_path = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    mask_path = os.path.join("masks", f"{zid}.png")
+    if os.path.isdir(output_path) and _is_rescan_zarr(output_path) and os.path.exists(mask_path) and not force:
+        print("  [1/3] 88 keV rescan volume exists -> skip")
+        return
+    work = os.path.join(TMP, f"r2_{zid}")
+    shutil.rmtree(work, ignore_errors=True)
+    os.makedirs(work)
+    try:
+        sums = _r2_fetch(f"{R2_BASE}/SHA256SUMS")
+    except RuntimeError as exc:
+        raise RuntimeError(f"{name}: cannot read SHA256SUMS: {exc}") from exc
+    expected = {line.split()[1]: line.split()[0] for line in sums.splitlines() if line.strip()}
+    archive = f"{zid}.tar.gz"
+    if archive not in expected:
+        raise RuntimeError(f"{name}: {archive} is not in the R2 bucket; upload it or use --no-r2")
+    local = os.path.join(work, archive)
+    t0 = time.time()
+    _r2_fetch(f"{R2_BASE}/{archive}", output=local)
+    digest = hashlib.sha256()
+    with open(local, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 24), b""):
+            digest.update(block)
+    if digest.hexdigest() != expected[archive]:
+        raise RuntimeError(f"{name}: {archive} checksum mismatch")
+    with tarfile.open(local) as tar:
+        members = tar.getmembers()
+        allowed = (f"{zid}.zarr", f"{zid}.png")
+        if any(m.name.split("/")[0] not in allowed or m.issym() or m.islnk() or ".." in m.name.split("/")
+               for m in members):
+            raise RuntimeError(f"{name}: unexpected entries in {archive}")
+        tar.extractall(work, members=members)
+    os.remove(local)
+    unpacked = os.path.join(work, f"{zid}.zarr")
+    if not _is_rescan_zarr(unpacked):
+        raise RuntimeError(f"{name}: {archive} does not hold an 88 keV rescan zarr")
+    if os.path.isdir(output_path):
+        print(f"  [1/3] superseding the existing zarr {output_path}")
+        shutil.rmtree(output_path)
+    shutil.move(unpacked, output_path)
+    os.makedirs("masks", exist_ok=True)
+    shutil.move(os.path.join(work, f"{zid}.png"), mask_path)
+    shutil.rmtree(work, ignore_errors=True)
+    print(f"  [1/3] R2 archive -> {output_path} + {mask_path} ({time.time() - t0:.0f}s)")
+
+
+def _build_dlash_mask(name, zid, opts):
+    base = opts["dlash_surface_base"].rstrip("/")
+    cache_dir = os.path.join(TMP, f"dlash_{zid}")
+    source_mask_path = os.path.join(cache_dir, "mask.png")
+    _download_once(f"{base}/mask.png", source_mask_path)
+    source_mask = cv2.imread(source_mask_path, cv2.IMREAD_GRAYSCALE)
+    expected_shape = tuple(map(int, opts["surface_expected_shape"][1:]))
+    if source_mask is None:
+        raise RuntimeError(f"{name}: failed to load downloaded mask")
+    if source_mask.shape != expected_shape:
+        raise RuntimeError(
+            f"{name}: source mask shape {source_mask.shape} != {expected_shape}"
+        )
+
+    output = __import__("zarr").open(os.path.join(ZARR_DIR, f"{zid}.zarr"), mode="r")
+    target_shape = tuple(map(int, output.shape[1:]))
+    mask = cv2.resize(source_mask, target_shape[::-1], interpolation=cv2.INTER_NEAREST)
+    os.makedirs("masks", exist_ok=True)
+    cv2.imwrite(f"masks/{zid}.png", mask)
+    print(f"  [mask] wrote masks/{zid}.png shape={mask.shape}")
+
+
+def _verify_dlash_outputs(name, zid, opts):
+    import zarr
+
+    source_depth, source_height, source_width = map(int, opts["surface_expected_shape"])
+    source_um = float(opts["source_um"])
+    expected_shape = (
+        TARGET_DEPTH,
+        int(round(source_height * source_um / TARGET_VOXEL_UM)),
+        int(round(source_width * source_um / TARGET_VOXEL_UM)),
+    )
+    volume = zarr.open(os.path.join(ZARR_DIR, f"{zid}.zarr"), mode="r")
+    if tuple(volume.shape) != expected_shape or np.dtype(volume.dtype) != np.dtype("<u2"):
+        raise RuntimeError(f"{name}: zarr shape/dtype {volume.shape}/{volume.dtype} != {expected_shape}/uint16")
+    positions = _dlash_depth_positions(source_depth, source_um)
+    valid_depths = np.flatnonzero((positions >= 0) & (positions <= source_depth - 1))
+    for depth in valid_depths:
+        if not np.any(np.asarray(volume[int(depth), ::64, ::64])):
+            raise RuntimeError(f"{name}: target depth {depth} has no sampled data")
+    mask = np.asarray(Image.open(f"masks/{zid}.png").convert("L")) > 0
+    if mask.shape != expected_shape[1:]:
+        raise RuntimeError(f"{name}: output mask dimensions do not match zarr XY")
+    midslice = np.asarray(volume[TARGET_DEPTH // 2]) > 0
+    overlap = float((mask & midslice).sum() / max(int(mask.sum()), 1))
+    if overlap <= 0.99:
+        raise RuntimeError(f"{name}: mask/midslice overlap {overlap:.5f} is not >0.99")
+    print(f"  [verify] {name}: shape={volume.shape} mask/midslice={overlap:.5f}")
+
+
+def _assemble_resampled_volume(seg, zid, source_um, vol_name, chunk_depth, chunk_y, chunk_x,
+                               expected_shape=None, force=False, source_url=None):
+    """resample a small isotropic surface zarr in XYZ to the 28-layer training frame."""
+    import cv2
+    import zarr
+
+    out_zarr = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    partial = out_zarr + ".partial"
+    mask_path = os.path.join("masks", f"{zid}.png")
+    if force:
+        shutil.rmtree(out_zarr, ignore_errors=True)
+        shutil.rmtree(partial, ignore_errors=True)
+        if os.path.exists(mask_path):
+            os.remove(mask_path)
+    if os.path.isdir(out_zarr) and os.path.exists(mask_path):
+        print("  [1/3] resampled volume+mask exist -> skip")
+        return
+
+    source_url = source_url or f"{BUCKET}/{seg}/surface-volumes/{vol_name}/0"
+    source = zarr.open(source_url, mode="r")
+    source_depth, source_height, source_width = map(int, source.shape)
+    if expected_shape is not None and tuple(source.shape) != tuple(expected_shape):
+        raise RuntimeError(
+            f"{zid}: source surface shape {tuple(source.shape)} != expected "
+            f"{tuple(expected_shape)}"
+        )
+    output_height = int(round(source_height * float(source_um) / TARGET_VOXEL_UM))
+    output_width = int(round(source_width * float(source_um) / TARGET_VOXEL_UM))
+    output_shape = (TARGET_DEPTH, output_height, output_width)
+    print(
+        f"  [1/3] isotropic resample {source.shape} @{source_um:.3f}um -> "
+        f"{output_shape} @{TARGET_VOXEL_UM:.3f}um"
+    )
+    shutil.rmtree(partial, ignore_errors=True)
+    output = zarr.open(
+        partial,
+        mode="w",
+        shape=output_shape,
+        chunks=(min(chunk_depth, TARGET_DEPTH), chunk_y, chunk_x),
+        dtype="<u2",
+        compressor=None,
+        zarr_format=2,
+    )
+    interpolation = cv2.INTER_AREA if output_height < source_height else cv2.INTER_LINEAR
+    source_row_height = 128
+    for source_y0 in range(0, source_height, source_row_height):
+        source_y1 = min(source_y0 + source_row_height, source_height)
+        output_y0 = int(round(source_y0 * output_height / source_height))
+        output_y1 = int(round(source_y1 * output_height / source_height))
+        if output_y1 <= output_y0:
+            continue
+        source_strip = np.asarray(source[:, source_y0:source_y1, :], dtype=np.uint8)
+        depth_resampled = _resample_depth_physical(
+            source_strip,
+            source_um,
+            TARGET_DEPTH,
+        )
+        output_strip = np.empty(
+            (TARGET_DEPTH, output_y1 - output_y0, output_width),
+            dtype=np.uint16,
+        )
+        for output_z in range(TARGET_DEPTH):
+            plane = cv2.resize(
+                depth_resampled[output_z],
+                (output_width, output_y1 - output_y0),
+                interpolation=interpolation,
+            )
+            output_strip[output_z] = np.clip(np.rint(plane), 0, 255).astype(np.uint16)
+        output[:, output_y0:output_y1, :] = output_strip
+        print(f"  [resample] rows {output_y1}/{output_height}", flush=True)
+    del output
+    if os.path.isdir(out_zarr):
+        shutil.rmtree(out_zarr)
+    os.replace(partial, out_zarr)
+    output = zarr.open(out_zarr, mode="r")
+    _write_mask_from_midslice(output, mask_path)
+    print(f"  [resample] wrote {out_zarr} shape={output_shape}")
+
+
+def _assemble_mesh_surface(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=False):
+    """download a sha256-pinned tifxyz mesh, render it natively from the raw volume, then resample to the training frame."""
+    import hashlib
+
+    import assemble_test_segments as test_assembler
+
+    out_zarr = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    if os.path.isdir(out_zarr) and os.path.exists(os.path.join("masks", f"{zid}.png")) and not force:
+        print("  [1/3] mesh-rendered volume+mask exist -> skip")
+        return
+    mesh = opts["tifxyz_mesh"]
+    os.makedirs(mesh["mesh_dir"], exist_ok=True)
+    for filename, expected in mesh["sha256"].items():
+        path = os.path.join(mesh["mesh_dir"], filename)
+        _download_once(f"{mesh['base_url']}/{filename}", path)
+        with open(path, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()
+        if digest != expected:
+            os.remove(path)
+            raise RuntimeError(f"{name}: {filename} sha256 {digest} != pinned {expected}")
+    source_um = float(opts["resample_um"])
+    # enough native layers to cover the 28 x 9.362 um output window
+    native_layers = int(np.ceil(TARGET_DEPTH * TARGET_VOXEL_UM / source_um)) + 1
+    native_layers += native_layers % 2
+    native_zarr = os.path.join(TMP, f"mesh_{zid}_native.zarr")
+    native_mask_dir = os.path.join(TMP, f"mesh_{zid}_mask")
+    cache_dir = os.path.join(TMP, f"render_{zid}")
+    if not os.path.isfile(os.path.join(native_mask_dir, f"{zid}.png")) or force:
+        print(f"  [1/3] rendering {mesh['mesh_dir']} -> {native_layers} native layers @{source_um} um", flush=True)
+        test_assembler.render_surface_volume(
+            mesh_dir=mesh["mesh_dir"], cache_dir=cache_dir, vol_base=mesh["volume_url"],
+            vol_shape=tuple(mesh["volume_shape"]), layers=native_layers, normal_step=1.0, upsample_factor=20.0,
+            workers=32, out_zarr=native_zarr, out_id=zid, chunk_depth=chunk_depth, chunk_y=chunk_y, chunk_x=chunk_x,
+            mask_dir=native_mask_dir, output_dtype="|u1", reverse_depth=_is_depth_reversed(zid))
+    _assemble_resampled_volume("", zid, source_um, "", chunk_depth, chunk_y, chunk_x, force=force,
+                               source_url=native_zarr)
+    shutil.rmtree(native_zarr, ignore_errors=True)
+    shutil.rmtree(native_mask_dir, ignore_errors=True)
+    shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+def _assemble_cropped_surface(zid, opts, chunk_depth, chunk_y, chunk_x, force=False):
+    """stream a native-target-resolution remote zarr into a tightly cropped local zarr."""
+    import zarr
+
+    out_zarr = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    partial = out_zarr + ".partial"
+    mask_path = os.path.join("masks", f"{zid}.png")
+    if force:
+        shutil.rmtree(out_zarr, ignore_errors=True)
+        shutil.rmtree(partial, ignore_errors=True)
+        if os.path.exists(mask_path):
+            os.remove(mask_path)
+    if os.path.isdir(out_zarr) and os.path.exists(mask_path):
+        print("  [1/3] cropped volume+mask exist -> skip")
+        return
+
+    source = zarr.open(str(opts["cropped_surface_url"]), mode="r")
+    expected_shape = tuple(map(int, opts["surface_expected_shape"]))
+    if tuple(source.shape) != expected_shape:
+        raise RuntimeError(f"{zid}: source surface shape {tuple(source.shape)} != {expected_shape}")
+    y0, y1, x0, x1 = map(int, opts["surface_crop"])
+    if not (0 <= y0 < y1 <= source.shape[1] and 0 <= x0 < x1 <= source.shape[2]):
+        raise ValueError(f"{zid}: invalid surface crop {(y0, y1, x0, x1)} for {source.shape}")
+    output_shape = (int(source.shape[0]), y1 - y0, x1 - x0)
+    shutil.rmtree(partial, ignore_errors=True)
+    output = zarr.open(
+        partial,
+        mode="w",
+        shape=output_shape,
+        chunks=(min(chunk_depth, output_shape[0]), chunk_y, chunk_x),
+        dtype="<u2",
+        compressor=None,
+        zarr_format=2,
+    )
+    for source_y0 in range(y0, y1, 128):
+        source_y1 = min(source_y0 + 128, y1)
+        output[:, source_y0 - y0:source_y1 - y0, :] = np.asarray(
+            source[:, source_y0:source_y1, x0:x1],
+            dtype=np.uint16,
+        )
+        print(f"  [crop] rows {source_y1 - y0}/{y1 - y0}", flush=True)
+    del output
+    if os.path.isdir(out_zarr):
+        shutil.rmtree(out_zarr)
+    os.replace(partial, out_zarr)
+    output = zarr.open(out_zarr, mode="r")
+    _write_mask_from_midslice(output, mask_path)
+    print(f"  [crop] wrote {out_zarr} shape={output_shape} crop={(y0, y1, x0, x1)}")
+
+
+def _assemble_pooled_surface(
+    seg, zid, opts, chunk_depth, chunk_y, chunk_x, expected_shape=None, force=False
+):
+    """stream a high-resolution surface pyramid and pool its native depth to 28."""
+    import zarr
+
+    out_zarr = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    partial = out_zarr + ".partial"
+    mask_path = os.path.join("masks", f"{zid}.png")
+    if force:
+        shutil.rmtree(out_zarr, ignore_errors=True)
+        shutil.rmtree(partial, ignore_errors=True)
+        if os.path.exists(mask_path):
+            os.remove(mask_path)
+    if os.path.isdir(out_zarr) and os.path.exists(mask_path):
+        print("  [1/3] pooled volume+mask exist -> skip")
+        return
+
+    level = int(opts.get("surface_level", 2))
+    source_url = f"{BUCKET}/{seg}/surface-volumes/{opts['surface_name']}/{level}"
+    source = zarr.open(source_url, mode="r")
+    if expected_shape is not None and tuple(source.shape) != tuple(expected_shape):
+        raise RuntimeError(
+            f"{zid}: source surface shape {tuple(source.shape)} != expected "
+            f"{tuple(expected_shape)}"
+        )
+    source_depth, source_height, source_width = map(int, source.shape)
+    y0, y1, x0, x1 = opts.get("surface_crop", (0, source_height, 0, source_width))
+    y0, y1 = max(0, int(y0)), min(source_height, int(y1))
+    x0, x1 = max(0, int(x0)), min(source_width, int(x1))
+    output_shape = (TARGET_DEPTH, y1 - y0, x1 - x0)
+    output_dtype = np.dtype(opts.get("output_dtype", "<u2"))
+    print(
+        f"  [1/3] level-{level} pool {source.shape} crop={(y0, y1, x0, x1)} "
+        f"depth={source_depth}->{TARGET_DEPTH} output={output_shape}"
+    )
+    shutil.rmtree(partial, ignore_errors=True)
+    output = zarr.open(
+        partial,
+        mode="w",
+        shape=output_shape,
+        chunks=(min(chunk_depth, TARGET_DEPTH), chunk_y, chunk_x),
+        dtype=output_dtype,
+        compressor=None,
+        zarr_format=2,
+    )
+    row_height = 128
+    for row_start in range(y0, y1, row_height):
+        row_end = min(row_start + row_height, y1)
+        source_row = np.asarray(source[:, row_start:row_end, x0:x1], dtype=np.float32)
+        pooled = _pool_w013_depth(source_row, TARGET_DEPTH)
+        output[:, row_start - y0:row_end - y0] = np.clip(
+            np.rint(pooled), 0, 255
+        ).astype(output_dtype)
+        print(f"  [pool] rows {row_end - y0}/{y1 - y0}", flush=True)
+    del output
+    if os.path.isdir(out_zarr):
+        shutil.rmtree(out_zarr)
+    os.replace(partial, out_zarr)
+    output = zarr.open(out_zarr, mode="r")
+    _write_mask_from_midslice(output, mask_path)
+    print(f"  [pool] wrote {out_zarr} shape={output_shape}")
+
+
+def _assemble_w013_volume(zid, chunk_depth, chunk_y, chunk_x, force=False):
+    """stream, pool, and crop PHerc1667 w013 without a standalone helper script."""
+    import zarr
+
+    out_zarr = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    mask_path = os.path.join("masks", f"{zid}.png")
+    if force:
+        if os.path.isdir(out_zarr):
+            shutil.rmtree(out_zarr, ignore_errors=True)
+        if os.path.exists(mask_path):
+            os.remove(mask_path)
+    if os.path.isdir(out_zarr) and os.path.exists(mask_path):
+        print("  [1/3] w013 volume+mask exist -> skip")
+        return
+
+    source_depth, output_height, _source_width = W013_SOURCE_SHAPE
+    output_depth, _, output_width = W013_OUTPUT_SHAPE
+    source_url = f"{W013_SURF_BASE}/{W013_SURF_LEVEL}"
+    print(
+        f"  [1/3] w013 source={source_url} "
+        f"pool={source_depth}->{output_depth} output={W013_OUTPUT_SHAPE}"
+    )
+    source = zarr.open(source_url, mode="r")
+    os.makedirs(ZARR_DIR, exist_ok=True)
+    output = zarr.open(
+        out_zarr,
+        mode="w",
+        shape=W013_OUTPUT_SHAPE,
+        chunks=(min(chunk_depth, output_depth), chunk_y, chunk_x),
+        dtype="<u2",
+        compressor=None,
+        zarr_format=2,
+    )
+    mask = np.zeros((output_height, output_width), dtype=np.uint8)
+    row_height = 128
+    row_count = (output_height + row_height - 1) // row_height
+    for row_index in range(row_count):
+        y0 = row_index * row_height
+        y1 = min(y0 + row_height, output_height)
+        row = np.asarray(source[:, y0:y1, :output_width], dtype=np.float32)
+        pooled = _pool_w013_depth(row, output_depth)
+        output[:, y0:y1] = np.clip(pooled, 0, 255).astype(np.uint16)
+        mask[y0:y1] = (pooled[output_depth // 2] > 0).astype(np.uint8) * 255
+        if (row_index + 1) % 10 == 0 or row_index + 1 == row_count:
+            print(f"  [w013] rows {row_index + 1}/{row_count}", flush=True)
+    os.makedirs("masks", exist_ok=True)
+    Image.fromarray(mask).save(mask_path)
+    print(f"  [w013] wrote {out_zarr} and {mask_path}")
+
+
+def _assemble_pherc1447_surface(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=False):
+    """assemble the released PHerc1447 24-layer render into the standard 28-layer training frame."""
+    import zarr
+
+    winding = str(opts["hf_pherc1447"])
+    reverse = _is_depth_reversed(zid)
+    out_zarr = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    partial = out_zarr + ".partial"
+    mask_path = os.path.join("masks", f"{zid}.png")
+    if force:
+        shutil.rmtree(out_zarr, ignore_errors=True)
+        shutil.rmtree(partial, ignore_errors=True)
+        if os.path.exists(mask_path):
+            os.remove(mask_path)
+    if os.path.isdir(out_zarr) and os.path.exists(mask_path):
+        print("  [1/3] PHerc1447 volume+mask exist -> skip")
+        return
+
+    cache_dir = os.path.join(TMP, "hf_pherc1447", winding)
+    layer_files = [f"{winding}/layers/{index:02d}.tif" for index in range(24)]
+    _hf_download(cache_dir, layer_files, force=force)
+    layer_paths = [os.path.join(cache_dir, relpath) for relpath in layer_files]
+    first_layer = cv2.imread(layer_paths[0], cv2.IMREAD_GRAYSCALE)
+    if first_layer is None:
+        raise RuntimeError(f"{name}: failed to read downloaded layer {layer_paths[0]}")
+    source_depth = len(layer_paths)
+    source_height, source_width = map(int, first_layer.shape)
+    output_shape = _pherc1447_output_shape(source_height, source_width)
+    print(
+        f"  [1/3] PHerc1447 {winding} resample {(source_depth, source_height, source_width)} "
+        f"@{PHERC1447_SOURCE_UM:.3f}um -> {output_shape} @{TARGET_VOXEL_UM:.3f}um"
+    )
+
+    layer_arrays = [cv2.imread(path, cv2.IMREAD_GRAYSCALE) for path in layer_paths]
+    if any(layer is None for layer in layer_arrays):
+        missing = [path for path, layer in zip(layer_paths, layer_arrays) if layer is None]
+        raise RuntimeError(f"{name}: failed to decode one or more downloaded layers: {missing[:3]}")
+    row_height = 256
+    shutil.rmtree(partial, ignore_errors=True)
+    output = zarr.open(
+        partial,
+        mode="w",
+        shape=output_shape,
+        chunks=(min(chunk_depth, TARGET_DEPTH), chunk_y, chunk_x),
+        dtype="<u2",
+        compressor=None,
+        zarr_format=2,
+    )
+    for source_y0 in range(0, source_height, row_height):
+        source_y1 = min(source_y0 + row_height, source_height)
+        output_y0 = int(round(source_y0 * output_shape[1] / source_height))
+        output_y1 = int(round(source_y1 * output_shape[1] / source_height))
+        if output_y1 <= output_y0:
+            continue
+        source_strip = np.stack(
+            [np.asarray(layer[source_y0:source_y1, :], dtype=np.uint8) for layer in layer_arrays],
+            axis=0,
+        )
+        if reverse:
+            source_strip = source_strip[::-1]
+        depth_resampled = _resample_depth_physical(source_strip, PHERC1447_SOURCE_UM, TARGET_DEPTH)
+        output_strip = np.empty((TARGET_DEPTH, output_y1 - output_y0, output_shape[2]), dtype=np.uint16)
+        for output_z in range(TARGET_DEPTH):
+            plane = cv2.resize(
+                depth_resampled[output_z],
+                (output_shape[2], output_y1 - output_y0),
+                interpolation=cv2.INTER_AREA,
+            )
+            output_strip[output_z] = np.clip(np.rint(plane), 0, 255).astype(np.uint16)
+        output[:, output_y0:output_y1, :] = output_strip
+        print(f"  [ph1447] rows {output_y1}/{output_shape[1]}", flush=True)
+    if reverse:
+        output.attrs["depth_flipped"] = True
+    del output
+    if os.path.isdir(out_zarr):
+        shutil.rmtree(out_zarr)
+    os.replace(partial, out_zarr)
+    output = zarr.open(out_zarr, mode="r")
+    _write_mask_from_midslice(output, mask_path)
+    print(f"  [ph1447] wrote {out_zarr} shape={output_shape}")
+
+
+_ALIAS_LOCK = threading.Lock()  # make_flat_alias rewrites norm_cache.json / surface_anchor_cache.json
+
+
+def _assemble_0846a(name, zid, workers, chunk_depth, chunk_y, chunk_x, force=False):
+    """render a PHerc0846A sheet from its tifxyz mesh, then build its flat depth-13 alias (symlinks, surface, norms, anchors)."""
+    import assemble_test_segments as test_assembler
+
+    _render, alias, mesh = MESHES_0846A[name]
+    os.makedirs(ZARR_DIR, exist_ok=True)
+    extra = {}
+    if name in EXTRAS_0846A:
+        extra = {"mask_dir": test_assembler.EXTRAS_MASK_DIR, "output_dtype": test_assembler.EXTRAS_DTYPE}
+    _zid, status = test_assembler.render_fragment(
+        zid, mesh, *VOL_0846A, workers, ZARR_DIR, test_assembler.SCRIPT_DIR, chunk_depth, chunk_y, chunk_x, force=force, **extra)
+    if not status.startswith("OK"):
+        raise RuntimeError(f"render {zid}: {status}")
+    if name in EXTRAS_0846A:
+        # make_flat_alias and every reader of masks/<render>.png find the extras mask through this link
+        link = os.path.join(test_assembler.MASK_DIR, f"{zid}.png")
+        if not os.path.lexists(link):
+            os.symlink(os.path.join(test_assembler.EXTRAS_SUBDIR, f"{zid}.png"), link)
+    with _ALIAS_LOCK:
+        status = test_assembler.make_flat_alias(zid, alias, ZARR_DIR)
+    if status != "OK":
+        raise RuntimeError(f"flat alias {alias}: {status}")
+    print(f"  [alias] {alias} -> {zid}: flat depth-13 surface, norm and anchors ready")
+
+
+def _eval_mask_dir(name):
+    return os.path.join("masks", "extras") if name in (*EVAL_QUICK_0846A, *EVAL_PRIZE_OLD, *EVAL_PRIZE_V3) else "masks"
+
+
+def _assemble_0846a_eval(name, zid, workers, chunk_depth, chunk_y, chunk_x, force=False):
+    """render a held-out PHerc0846A evaluation segment from its tifxyz mesh (+ its flat alias when it has one)."""
+    import assemble_test_segments as test_assembler
+
+    os.makedirs(ZARR_DIR, exist_ok=True)
+    if name in EVAL_QUICK_0846A:
+        mesh = f"quick_patches_from_D/PHerc0846A/{name}"
+        extra = {"mask_dir": test_assembler.EXTRAS_MASK_DIR, "output_dtype": test_assembler.EXTRAS_DTYPE, "drop_cache": True}
+    elif name in (*EVAL_PRIZE_OLD, *EVAL_PRIZE_V3):
+        mesh = name
+        extra = {"mask_dir": test_assembler.EXTRAS_MASK_DIR, "output_dtype": test_assembler.EXTRAS_DTYPE}
+    else:
+        mesh, extra = EVAL_MESHES_0846A[name][1], {}
+    _zid, status = test_assembler.render_fragment(
+        zid, mesh, *VOL_0846A, workers, ZARR_DIR, test_assembler.SCRIPT_DIR, chunk_depth, chunk_y, chunk_x,
+        force=force, **extra)
+    if not status.startswith("OK"):
+        raise RuntimeError(f"render {zid}: {status}")
+    alias = test_assembler.FLAT_ALIASES.get(zid)
+    if alias:
+        with _ALIAS_LOCK:
+            status = test_assembler.make_flat_alias(zid, alias, ZARR_DIR)
+        if status != "OK":
+            raise RuntimeError(f"flat alias {alias}: {status}")
+        print(f"  [alias] {alias} -> {zid}: flat depth-13 surface, norm and anchors ready")
+
+
+def _assemble_hf_render(zid, opts, chunk_depth, chunk_y, chunk_x, force=False):
+    """download level 0 of a render zarr from a Hugging Face dataset, then resample it like any 8.64 um surface volume."""
+    source = opts["hf_render"]
+    if os.path.isdir(os.path.join(ZARR_DIR, f"{zid}.zarr")) and os.path.exists(f"masks/{zid}.png") and not force:
+        print("  [1/3] resampled volume+mask exist -> skip")
+        return
+    cache_dir = os.path.join(TMP, f"hf_{zid}")
+    path = source["path"].rstrip("/")
+    _hf_download(cache_dir, [], force=force, repo=source["repo"],
+                 include=[f"{path}/.zattrs", f"{path}/.zgroup", f"{path}/0/*"])
+    _assemble_resampled_volume(
+        "", zid, float(opts["resample_um"]), "", chunk_depth, chunk_y, chunk_x,
+        expected_shape=tuple(opts["surface_expected_shape"]), force=force, source_url=os.path.join(cache_dir, path, "0"))
+
+
+def step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=False):
+    opts = FRAG_OPTS.get(name, {})
+    if name in MESHES_0846A:
+        _assemble_0846a(name, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
+        return
+    if name in EVAL_0846A:
+        _assemble_0846a_eval(name, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
+        return
+    if opts.get("hf_pherc1447"):
+        _assemble_pherc1447_surface(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=force)
+        return
+    if opts.get("tifxyz_mesh"):
+        _assemble_mesh_surface(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=force)
+        return
+    if name in RESCAN_88KEV:
+        if R2_BASE:
+            _fetch_rescan_r2(name, zid, force=force)
+        else:
+            _assemble_dlash_rescan(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=force)
+        return
+    if opts.get("dlash_surface_base"):
+        _assemble_dlash_surface(
+            name, zid, opts, workers, chunk_depth, chunk_y, chunk_x, force=force
+        )
+        return
+    if opts.get("cropped_surface_url"):
+        _assemble_cropped_surface(
+            zid, opts, chunk_depth, chunk_y, chunk_x, force=force
+        )
+        return
+    if opts.get("w013_special"):
+        _assemble_w013_volume(zid, chunk_depth, chunk_y, chunk_x, force=force)
+        return
+    if opts.get("pooled_special"):
+        _assemble_pooled_surface(
+            seg,
+            zid,
+            opts,
+            chunk_depth,
+            chunk_y,
+            chunk_x,
+            expected_shape=opts.get("surface_expected_shape"),
+            force=force,
+        )
+        return
+    if opts.get("hf_render"):
+        _assemble_hf_render(zid, opts, chunk_depth, chunk_y, chunk_x, force=force)
+        return
+    if opts.get("resample_um"):
+        _assemble_resampled_volume(
+            seg,
+            zid,
+            float(opts["resample_um"]),
+            str(opts["vol9_name"]),
+            chunk_depth,
+            chunk_y,
+            chunk_x,
+            force=force,
+        )
+        return
+    zpath = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    mpath = f"masks/{zid}.png"
+    if os.path.exists(zpath) and os.path.exists(mpath) and not force:
+        print(f"  [1/3] volume+mask exist -> skip")
+        return
+    if force:
+        # clear stale outputs + the per-fragment chunk cache so the re-download is clean;
+        # a reused cache can carry the corrupt/air chunks that blanked the volume
+        cache = os.path.join(TMP, f"dl_{zid}")
+        if os.path.isdir(zpath):
+            shutil.rmtree(zpath, ignore_errors=True)
+        if os.path.exists(mpath):
+            try: os.remove(mpath)
+            except OSError: pass
+        if os.path.isdir(cache):
+            shutil.rmtree(cache, ignore_errors=True)
+        print(f"  [1/3] --force: cleared zarr/mask + chunk cache, re-downloading")
+    # per-fragment volume name override (non-PHerc0139 scrolls have a different raw vol id)
+    vol9 = FRAG_OPTS.get(name, {}).get("vol9_name", VOL9_NAME)
+    url = f"{BUCKET}/{seg}/surface-volumes/{vol9}"
+    cache = os.path.join(TMP, f"dl_{zid}")
+    _download_surface_zarr(url, level=0, out_zarr=zpath, out_id=zid, 
+                           workers=workers, cache_dir=cache,
+                           chunk_depth=chunk_depth, chunk_y=chunk_y, chunk_x=chunk_x)
+    
+    # INTEGRITY CHECK: verify all depth slices have valid data (catches incomplete downloads)
+    _verify_zarr_integrity(zpath, zid)
+
+def _is_depth_reversed(zid):
+    from utils.depth_flip import reversed_ids
+    return str(zid) in reversed_ids()
+
+
+def _check_depth_orientation(zid):
+    """reversed ids must already have been ASSEMBLED reversed (attrs depth_flipped=true)."""
+    if not _is_depth_reversed(zid):
+        return
+    import zarr
+    path = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    if not zarr.open(path, mode="r").attrs.get("depth_flipped", False):
+        raise RuntimeError(
+            f"{zid} is in depth_reversed.json but {path} lacks depth_flipped=true "
+            f"(stale/unsupported assembler). Re-assemble with --force.")
+
+
+def step2_check_labels(name, seg, zid):
+    """verify required label files exist and match the assembled zarr's XY dimensions."""
+    del seg
+    import zarr
+
+    opts = FRAG_OPTS.get(name, {})
+    volume = zarr.open(os.path.join(ZARR_DIR, f"{zid}.zarr"), mode="r")
+    expected_shape = tuple(map(int, volume.shape[1:]))
+    mask_path = f"masks/{zid}.png"
+    mask_frac = _check_png_xy("mask", mask_path, expected_shape)
+    print(f"  [2/4] mask present: {mask_path}  valid={mask_frac:.4f}")
+
+    required_dirs = tuple(opts.get("required_label_dirs", ()))
+    if required_dirs:
+        for directory in required_dirs:
+            path = os.path.join(directory, f"{zid}.png")
+            valid_frac = _check_png_xy(directory, path, expected_shape)
+            print(f"  [2/4] {directory} present: {path}  valid={valid_frac:.4f}")
+        return
+
+    dilated_path = f"dilated_inklabels/{zid}.png"
+    try:
+        valid_frac = _check_png_xy("dilated labels", dilated_path, expected_shape)
+        print(f"  [2/4] dilated labels present: {dilated_path}  valid={valid_frac:.4f}")
+        return
+    except Exception as exc:
+        print(f"  [2/4] \033[91m{'='*60}")
+        print(f"  !! WARNING: MISSING OR MISMATCHED dilated LABEL FILE !!")
+        print(f"  Expected: {dilated_path}")
+        print(f"  Reason: {exc}")
+        print(f"  This fragment CANNOT be used for training without labels.")
+        print(f"  dilated labels must be pre-generated and match the zarr/mask XY dimensions.")
+        print(f"  {'='*60}\033[0m")
+
+
+def step3_norm(name, seg, zid, skip, force=False):
+    if skip:
+        print(f"  [3/4] --skip-norm -> skip")
+        return
+    import json
+    from utils.norm import UNIFIED_CACHE_PATH
+    if not force and os.path.exists(UNIFIED_CACHE_PATH):
+        try:
+            if zid in json.load(open(UNIFIED_CACHE_PATH)):
+                print(f"  [3/4] norm cached -> skip")
+                return
+        except Exception:
+            pass
+    run([sys.executable, "-m", "utils.precompute_norm", "--scroll-id", zid, "--zarr-path", ZARR_DIR])
+
+
+def step4_surface(name, zid, skip, force=False):
+    """write surface_labels/<id>/ with utils/generate_surface_supervision.py unless labels for this frame exist."""
+    if skip:
+        print(f"  [4/4] --skip-surface -> skip")
+        return
+    if FRAG_OPTS.get(name, {}).get("flat_surface"):
+        # no usable detection: a flat surface at the measured centre layer of the depth-reversed stack (utils/mix6.py)
+        from utils import mix6
+        print(f"  [4/4] {mix6.write_flat_surface(zid, force=force)}")
+        return
+    depth_path = os.path.join("surface_labels", str(zid), "depth.npy")
+    mask = cv2.imread(os.path.join("masks", f"{zid}.png"), cv2.IMREAD_GRAYSCALE)
+    if not force and os.path.isfile(depth_path) and mask is not None \
+            and np.load(depth_path, mmap_mode="r").shape == mask.shape:
+        print(f"  [4/4] surface labels exist -> skip")
+        return
+    z_start, z_end = SURFACE_Z_RANGE.get(name, (4, 28))
+    run([sys.executable, "-m", "utils.generate_surface_supervision", "--scroll-id", str(zid), "--zarr-dir", ZARR_DIR,
+         "--z-start", str(z_start), "--z-end", str(z_end)])
+
+
+def step4_translate(name, zid, checkpoint, force=False):
+    """write ves_zarrs2/<id>.translated.zarr from the local zarr (no download) and its norm under that key."""
+    from utils.degrader import REFERENCE_NATIVE_ID, TRANSLATED_SUFFIX, is_current, translate_zarr
+    from utils.norm import (SURFACE_ANCHOR_CACHE_PATH, UNIFIED_CACHE_PATH, compute_norm, ensure_surface_anchors,
+                            load_cached_norm)
+
+    src = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    volume_id = f"{zid}{TRANSLATED_SUFFIX}"
+    dst = os.path.join(ZARR_DIR, f"{volume_id}.zarr")
+    if not os.path.isdir(src):
+        raise FileNotFoundError(f"{name}: {src} missing; assemble it first")
+    if is_current(dst, checkpoint) and not force:
+        print(f"  [translate] {dst} matches {checkpoint} -> skip")
+    else:
+        reference = load_cached_norm(REFERENCE_NATIVE_ID, UNIFIED_CACHE_PATH)
+        if reference is None:
+            raise RuntimeError(f"reference native scroll {REFERENCE_NATIVE_ID} has no norm_cache.json entry")
+        mask = np.array(Image.open(f"masks/{zid}.png").convert("L"))
+        translate_zarr(src, dst, checkpoint, mask, reference)
+        force = True
+    if force or load_cached_norm(volume_id, UNIFIED_CACHE_PATH) is None:
+        compute_norm(volume_id, ZARR_DIR, cache_path=UNIFIED_CACHE_PATH, mask_id=zid)
+    if force and os.path.exists(SURFACE_ANCHOR_CACHE_PATH):
+        anchors = json.load(open(SURFACE_ANCHOR_CACHE_PATH))
+        if anchors.pop(volume_id, None) is not None:
+            with open(SURFACE_ANCHOR_CACHE_PATH, "w") as handle:
+                json.dump(anchors, handle, indent=2)
+    # surface-anchored normalisation (the campaign-39 baseline) needs the translated volume's own anchors
+    ensure_surface_anchors([volume_id], ZARR_DIR)
+
+
+def step4_spectral_match(name, zid, reference=None, force=False, sigmas=None):
+    """write ves_zarrs2/<id>.matched.zarr: the local zarr blurred to the native spectrum, plus its norm and anchors.
+    sigmas=(sigma_xy, sigma_z) applies a fixed PSF; otherwise the PSF is fitted against reference."""
+    from utils.norm import SURFACE_ANCHOR_CACHE_PATH, UNIFIED_CACHE_PATH, compute_norm, ensure_surface_anchors, load_cached_norm
+    from utils.spectral_match import MATCHED_SUFFIX, fit_sigmas, is_matched, load_crops, match_zarr
+
+    src = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    volume_id = f"{zid}{MATCHED_SUFFIX}"
+    dst = os.path.join(ZARR_DIR, f"{volume_id}.zarr")
+    if not os.path.isdir(src):
+        raise FileNotFoundError(f"{name}: {src} missing; assemble it first")
+    current = None
+    if is_matched(dst):
+        with open(os.path.join(dst, ".zattrs"), encoding="utf-8") as handle:
+            attrs = json.load(handle)["spectral_match"]
+        current = (attrs["sigma_xy"], attrs["sigma_z"])
+    if current is not None and not force and (sigmas is None or tuple(sigmas) == current):
+        print(f"  [match] {dst} exists (sigma_xy={current[0]} sigma_z={current[1]}) -> skip")
+    else:
+        if sigmas is not None:
+            sigma_xy, sigma_z = sigmas
+            print(f"  [match] {name}: sigma_xy={sigma_xy} sigma_z={sigma_z} (pinned)", flush=True)
+        else:
+            sigma_xy, sigma_z, fitted = fit_sigmas(load_crops(src), reference)
+            print(f"  [match] {name}: sigma_xy={sigma_xy} sigma_z={sigma_z} fitted {np.round(fitted, 3).tolist()} "
+                  f"reference {np.round(reference, 3).tolist()}", flush=True)
+        match_zarr(src, dst, sigma_xy, sigma_z)
+        force = True
+    if force or load_cached_norm(volume_id, UNIFIED_CACHE_PATH) is None:
+        compute_norm(volume_id, ZARR_DIR, cache_path=UNIFIED_CACHE_PATH, mask_id=zid)
+    if force and os.path.exists(SURFACE_ANCHOR_CACHE_PATH):
+        anchors = json.load(open(SURFACE_ANCHOR_CACHE_PATH))
+        if anchors.pop(volume_id, None) is not None:
+            with open(SURFACE_ANCHOR_CACHE_PATH, "w") as handle:
+                json.dump(anchors, handle, indent=2)
+    ensure_surface_anchors([volume_id], ZARR_DIR)
+
+
+def process_fragment(name, seg, zid, workers, skip_norm, skip_surface, chunk_depth, chunk_y, chunk_x,
+                     prefix="", force=False, degrade=True):
+    """run the full assembly pipeline for one fragment. isolated in try/except so a
+    single failure never kills a concurrent batch. respects FRAG_OPTS (skip_labels).
+    degrade: fine scans (MATCHED_SIGMAS) also get their <id>.matched training volume."""
+    opts = FRAG_OPTS.get(name, {})
+    tag = f"{prefix}{name} ({zid})"
+    try:
+        print(f"\n{'='*70}\n{tag}  id={zid}\n{'='*70}", flush=True)
+        if name in MESHES_0846A or name in EVAL_0846A:
+            # the flat alias carries the label, surface, norm and anchors; nothing below applies to the render
+            step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
+            print(f"[done] {tag}")
+            return (name, "OK")
+        if opts.get("hf_pherc1447"):
+            _prepare_pherc1447_labels(name, zid, opts, force=force)
+        step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
+        if opts.get("dlash_surface_base"):
+            if name not in RESCAN_88KEV:
+                _build_dlash_mask(name, zid, opts)
+            _verify_dlash_outputs(name, zid, opts)
+        if not opts.get("skip_labels"):
+            step2_check_labels(name, seg, zid)
+        else:
+            print(f"  [labels] skip_labels -> keeping existing dilated_inklabels")
+        step3_norm(
+            name,
+            seg,
+            zid,
+            skip_norm,
+            force=force or bool(opts.get("force_norm", False)),
+        )
+        step4_surface(name, zid, skip_surface, force=force)
+        if degrade and name in MATCHED_SIGMAS:
+            step4_spectral_match(name, zid, force=force, sigmas=MATCHED_SIGMAS[name])
+        print(f"[done] {tag}")
+        return (name, "OK")
+    except Exception as e:
+        import traceback
+        print(f"[FAIL] {tag}: {e}")
+        traceback.print_exc()
+        return (name, f"FAIL: {e}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--only", type=str, default=None)
+    ap.add_argument("--from", dest="from_name", type=str, default=None)
+    ap.add_argument("--workers", type=int, default=32,
+                    help="parallel S3 chunk-download workers PER fragment (default 32 for EPYC 7702)")
+    ap.add_argument("--concurrent-fragments", type=int, default=5,
+                    help="number of fragments to assemble in parallel (default 5). "
+                         "each uses --workers download threads, so total connections "
+                         "= concurrent_fragments * workers; watch RAM (~2-5GB per fragment).")
+    ap.add_argument("--skip-norm", action="store_true")
+    ap.add_argument("--skip-surface", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="re-download/re-render + recompute norm even if outputs exist; also clears "
+                         "the per-fragment chunk cache for a clean S3 re-fetch (use to fix a corrupted zarr)")
+    ap.add_argument("--chunk-depth", type=int, default=DEFAULT_CHUNK_DEPTH,
+                    help=f"zarr depth chunk size (default {DEFAULT_CHUNK_DEPTH}, optimized for 8-slice windows)")
+    ap.add_argument("--chunk-y", type=int, default=DEFAULT_CHUNK_Y,
+                    help=f"zarr Y chunk size (default {DEFAULT_CHUNK_Y})")
+    ap.add_argument("--chunk-x", type=int, default=DEFAULT_CHUNK_X,
+                    help=f"zarr X chunk size (default {DEFAULT_CHUNK_X})")
+    ap.add_argument("--no-r2", action="store_true",
+                    help="render the 88 keV fragments from dl.ash2txt (~1 h) instead of downloading the "
+                         "pre-rendered archives from $R2_PUBLIC_URL")
+    ap.add_argument("--degrader", default=None,
+                    help="plan R only: translate the existing local zarrs of TRANSLATE_NAMES (or --only) with this "
+                         "utils/degrader.py checkpoint into <id>.translated.zarr siblings; nothing is downloaded")
+    ap.add_argument("--spectral-match", action="store_true",
+                    help="only refit the gaussian PSF of TRANSLATE_NAMES (or --only) against the native 113 keV "
+                         "spectrum and rewrite their <id>.matched.zarr siblings (utils/spectral_match.py); the "
+                         "default assembly already writes them with the pinned MATCHED_SIGMAS")
+    ap.add_argument("--no-degrade", action="store_true",
+                    help="skip the default <id>.matched.zarr degradation of the fine scans (MATCHED_SIGMAS)")
+    ap.add_argument("--mix28", action="store_true",
+                    help="download and set up exactly the 29 sheets / patches of the default corpus: the 28 registered mix28 patches (14 PHerc0846A "
+                         "sheets + 14 donors) and the fiber_only_20261102b_flatboi_PRIZESHEET prize sheet, with exclusions, anchors and asf cues "
+                         "(see the docstring); --only adds scrolls on top")
+    ap.add_argument("--check", action="store_true", help="with --mix28: report what is missing or stale (read-only) and exit")
+    ap.add_argument("--cue-workers", type=int, default=4, help="parallel asf cue builds with --mix28 (default 4)")
+    ap.add_argument("--rebuild-cues", action="store_true", help="with --mix28: rebuild every asf cue, not only the missing ones")
+    args = ap.parse_args()
+    if args.check and not args.mix28:
+        ap.error("--check needs --mix28")
+    if args.mix28 and (args.from_name or args.spectral_match or args.degrader):
+        ap.error("--mix28 selects the fragments itself (--only adds scrolls on top)")
+    if args.mix28:
+        from utils import mix6
+        if args.check:
+            sys.exit(1 if mix6.report() else 0)
+
+    if args.spectral_match:
+        from utils.spectral_match import reference_stats
+
+        want = {o.strip() for o in (args.only or "").split(",") if o.strip()} or set(TRANSLATE_NAMES)
+        reference = reference_stats(ZARR_DIR)
+        results = []
+        for name, _seg, zid in SEGMENTS:
+            if name not in want:
+                continue
+            try:
+                print(f"\n{'='*70}\n[match] {name} ({zid})\n{'='*70}", flush=True)
+                step4_spectral_match(name, zid, reference, force=args.force)
+                results.append((name, "OK"))
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                results.append((name, f"FAIL: {exc}"))
+        print("\n[match] SUMMARY")
+        for name, status in results:
+            print(f"  {name}: {status}")
+        return
+
+    if args.degrader:
+        want = {o.strip() for o in (args.only or "").split(",") if o.strip()} or set(TRANSLATE_NAMES)
+        results = []
+        for name, _seg, zid in SEGMENTS:
+            if name not in want:
+                continue
+            if name not in TRANSLATE_NAMES:
+                print(f"[translate] {name} is not a downscaled fine scan; skipped")
+                continue
+            try:
+                print(f"\n{'='*70}\n[translate] {name} ({zid})\n{'='*70}", flush=True)
+                step4_translate(name, zid, args.degrader, force=args.force)
+                results.append((name, "OK"))
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                results.append((name, f"FAIL: {exc}"))
+        print(f"\n[translate] SUMMARY")
+        for name, status in results:
+            print(f"  {name}: {status}")
+        return
+
+    segs = SEGMENTS
+    if args.mix28:
+        # exactly the 29 sheets / patches of mix28 plus any scrolls named with --only (those get the plain per-fragment pipeline)
+        want = set(mix6.ASSEMBLER_NAMES) | {o.strip() for o in (args.only or "").split(",") if o.strip()}
+        segs = [s for s in SEGMENTS if s[0] in want]
+    elif args.only:
+        # comma-separated list so several fragments can be forced in one run
+        want = {o.strip() for o in args.only.split(",") if o.strip()}
+        segs = [s for s in SEGMENTS if s[0] in want]
+    elif args.from_name:
+        names = [s[0] for s in SEGMENTS]
+        segs = SEGMENTS[names.index(args.from_name):]
+
+    global R2_BASE
+    if not args.no_r2 and any(name in RESCAN_88KEV for name, _seg, _zid in segs):
+        try:
+            R2_BASE = f"{configure_r2()}/{R2_PREFIX}"
+        except ValueError as exc:
+            ap.error(f"{exc}; needed to fetch the 88 keV fragment archives -- pass --no-r2 to render them "
+                     "from dl.ash2txt instead")
+
+    cf = max(1, int(args.concurrent_fragments))
+    print(f"[assemble] {len(segs)} fragment(s): {[s[0] for s in segs]}  "
+          f"(concurrent_fragments={cf}, workers/frag={args.workers}, "
+          f"chunks=({args.chunk_depth},{args.chunk_y},{args.chunk_x}))")
+
+    results = []
+    if cf == 1:
+        for name, seg, zid in segs:
+            results.append(process_fragment(name, seg, zid, args.workers, args.skip_norm, args.skip_surface,
+                                          args.chunk_depth, args.chunk_y, args.chunk_x,
+                                          force=args.force, degrade=not args.no_degrade))
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=cf) as ex:
+            futs = {ex.submit(process_fragment, name, seg, zid, args.workers,
+                              args.skip_norm, args.skip_surface,
+                              args.chunk_depth, args.chunk_y, args.chunk_x,
+                              prefix=f"[{name}] ", force=args.force, degrade=not args.no_degrade): name
+                    for name, seg, zid in segs}
+            for fut in as_completed(futs):
+                results.append(fut.result())
+
+    print(f"\n{'='*70}\n[assemble] SUMMARY\n{'='*70}")
+    for nm, status in results:
+        print(f"  {nm}: {status}")
+
+    # HARDENING: integrity-sweep EVERY scroll (not just the ones touched this run) so a
+    # partial/interrupted zarr that 'exists -> skip' silently kept gets caught and reported.
+    swept = segs if (args.mix28 or args.only) else SEGMENTS
+    print(f"\n{'='*70}\n[assemble] INTEGRITY SWEEP ({len(swept)} scrolls)\n{'='*70}")
+    broken = []
+    for name, _seg, zid in swept:
+        ok, msg = _zarr_integrity(zid, mask_dir=_eval_mask_dir(name))
+        if ok:
+            print(f"  OK   {name:<12} {zid}  {msg}")
+        else:
+            print(f"  \033[91mFAIL {name:<12} {zid}  {msg}\033[0m")
+            broken.append(name)
+    if broken:
+        ids = ",".join(broken)
+        print(f"\n\033[91m[assemble] {len(broken)} scroll(s) FAILED integrity: {broken}")
+        print(f"  fix with: python assemble_training_segments.py --force --only {ids}\033[0m")
+    else:
+        print(f"[assemble] integrity sweep: all {len(swept)} scrolls OK")
+
+    if args.mix28:
+        failed = [nm for nm, status in results if not status.startswith("OK")] + broken
+        if failed:
+            sys.exit(f"[mix28] not finalized, fragments failed: {failed}")
+        # flat 1447 surfaces are written in step 4; anchors and the 3 depths of cues need every surface, so they come last
+        mix6.finalize(workers=args.cue_workers, rebuild_cues=args.rebuild_cues)
+        problems = mix6.report()
+        print("[mix28] data ready for train.py, finetune_readerv3.py and finetune_v8in.py" if not problems
+              else "[mix28] data NOT ready")
+        sys.exit(1 if problems else 0)
+
+
+if __name__ == "__main__":
+    main()

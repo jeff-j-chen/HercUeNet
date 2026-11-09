@@ -1,0 +1,404 @@
+"""Campaign-lifetime selective cache for local zarr volume chunks."""
+from __future__ import annotations
+
+import json
+import mmap
+import os
+from concurrent.futures import ThreadPoolExecutor
+from typing import Iterable
+
+import numpy as np
+
+# below this many chunks the forked reader costs more than it saves
+_PROCESS_PRELOAD_MIN_CHUNKS = 2000
+_PROCESS_PRELOAD_WORKERS = 16
+# set in the parent just before forking; children write through the inherited shared mapping
+_FORK_JOB = None
+
+
+def _fork_read(task):
+    """child: copy raw zarr chunk files for a slice of the job's keys into the shared buffer."""
+    start, stop = task
+    job = _FORK_JOB
+    depth, chunk_z, chunk_y, chunk_x = job["depth"], job["chunk_z"], job["chunk_y"], job["chunk_x"]
+    dtype, root, sep, fill = job["dtype"], job["root"], job["sep"], job["fill"]
+    for (cy, cx), offset, (height, width) in job["items"][start:stop]:
+        out = np.ndarray((depth, height, width), dtype=dtype, buffer=job["buffer"], offset=offset)
+        for cz in range(-(-depth // chunk_z)):
+            z0 = cz * chunk_z
+            z1 = min(z0 + chunk_z, depth)
+            try:
+                with open(os.path.join(root, f"{cz}{sep}{cy}{sep}{cx}"), "rb") as handle:
+                    raw = handle.read()
+            except FileNotFoundError:
+                out[z0:z1] = fill
+                continue
+            chunk = np.frombuffer(raw, dtype=dtype).reshape(chunk_z, chunk_y, chunk_x)
+            out[z0:z1] = chunk[:z1 - z0, :height, :width]
+    return stop - start
+
+
+def _fork_read_full(task):
+    """child: copy the raw chunk files of the given (cz, cy, cx) keys straight into the shared full-volume buffer."""
+    job = _FORK_JOB
+    shape, chunks = job["shape"], job["chunks"]
+    out = np.ndarray(shape, dtype=job["dtype"], buffer=job["buffer"])
+    for cz, cy, cx in task:
+        z0, y0, x0 = cz * chunks[0], cy * chunks[1], cx * chunks[2]
+        z1, y1, x1 = min(z0 + chunks[0], shape[0]), min(y0 + chunks[1], shape[1]), min(x0 + chunks[2], shape[2])
+        try:
+            with open(os.path.join(job["root"], f"{cz}{job['sep']}{cy}{job['sep']}{cx}"), "rb") as handle:
+                raw = handle.read()
+        except FileNotFoundError:
+            out[z0:z1, y0:y1, x0:x1] = job["fill"]
+            continue
+        chunk = np.frombuffer(raw, dtype=job["dtype"]).reshape(chunks)
+        out[z0:z1, y0:y1, x0:x1] = chunk[:z1 - z0, :y1 - y0, :x1 - x0]
+    return len(task)
+
+
+def read_full_zarr_forked(path: str):
+    """whole uncompressed zarr v2 volume as one read-only array, read by forked processes; None when the store doesn't qualify.
+
+    zarr's own slicing decodes the many small chunks one at a time in this process (tens of MB/s)."""
+    global _FORK_JOB
+    import multiprocessing
+
+    try:
+        with open(os.path.join(path, ".zarray"), encoding="utf-8") as handle:
+            meta = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if (meta.get("zarr_format") != 2 or meta.get("compressor") is not None or meta.get("filters")
+            or meta.get("order", "C") != "C" or meta.get("fill_value") is None
+            or "fork" not in multiprocessing.get_all_start_methods()):
+        return None
+    shape, chunks, dtype = tuple(meta["shape"]), tuple(meta["chunks"]), np.dtype(meta["dtype"])
+    keys = [
+        (cz, cy, cx)
+        for cz in range(-(-shape[0] // chunks[0]))
+        for cy in range(-(-shape[1] // chunks[1]))
+        for cx in range(-(-shape[2] // chunks[2]))
+    ]
+    if len(keys) < _PROCESS_PRELOAD_MIN_CHUNKS:
+        return None
+    buffer = mmap.mmap(-1, max(int(np.prod(shape)) * dtype.itemsize, 1))
+    workers = max(1, min(_PROCESS_PRELOAD_WORKERS, os.cpu_count() or 1))
+    bounds = np.linspace(0, len(keys), workers * 8 + 1).astype(int)
+    tasks = [keys[a:b] for a, b in zip(bounds[:-1], bounds[1:]) if b > a]
+    _FORK_JOB = {
+        "shape": shape, "chunks": chunks, "dtype": dtype, "buffer": buffer, "root": path,
+        "sep": meta.get("dimension_separator") or ".", "fill": meta["fill_value"],
+    }
+    try:
+        with multiprocessing.get_context("fork").Pool(workers) as pool:
+            done = sum(pool.imap_unordered(_fork_read_full, tasks))
+    except Exception as exc:
+        print(f"[vis-preload] forked read failed ({exc}); using zarr", flush=True)
+        return None
+    finally:
+        _FORK_JOB = None
+    if done != len(keys):
+        return None
+    array = np.ndarray(shape, dtype=dtype, buffer=buffer)
+    array.setflags(write=False)
+    return array
+
+
+def read_full_zarr_threaded(source, workers: int = _PROCESS_PRELOAD_WORKERS, z_range=None) -> np.ndarray:
+    """a zarr array (all slices, or z_range = (z0, z1)) as one read-only array, one slab of chunk rows per thread task.
+
+    zarr's own [:] reads chunk files one after another (~130 files/s on the network mount); overlapping the waits is ~9x faster."""
+    z0, z1 = (0, int(source.shape[0])) if z_range is None else (int(z_range[0]), int(z_range[1]))
+    shape, chunk_y = (z1 - z0, int(source.shape[1]), int(source.shape[2])), int(source.chunks[1])
+    out = np.empty(shape, dtype=source.dtype)
+
+    def fill(y0: int) -> None:
+        y1 = min(y0 + chunk_y, shape[1])
+        out[:, y0:y1] = source[z0:z1, y0:y1]
+
+    with ThreadPoolExecutor(max_workers=max(1, int(workers))) as executor:
+        list(executor.map(fill, range(0, shape[1], chunk_y)))
+    out.setflags(write=False)
+    return out
+
+
+class WindowVolume:
+    """read-only zarr-like volume that keeps only slices [z0, z1) in RAM; any other read goes to the zarr on demand."""
+
+    def __init__(self, source, z0: int, z1: int, workers: int = _PROCESS_PRELOAD_WORKERS):
+        self.source = source
+        self.shape = tuple(int(value) for value in source.shape)
+        self.dtype = source.dtype
+        self.ndim = 3
+        self.z0, self.z1 = max(0, int(z0)), min(self.shape[0], int(z1))
+        self.window = read_full_zarr_threaded(source, workers, z_range=(self.z0, self.z1))
+
+    @property
+    def nbytes(self) -> int:
+        return self.window.nbytes
+
+    def __getitem__(self, item):
+        item = item if isinstance(item, tuple) else (item,)
+        z, y, x = (item + (slice(None),) * 3)[:3]
+        if isinstance(z, slice) and z.step in (None, 1):
+            start, stop, _ = z.indices(self.shape[0])
+            if self.z0 <= start and stop <= self.z1:
+                return self.window[start - self.z0:stop - self.z0, y, x]
+        return self.source[(z, y, x)]
+
+
+def zarr_directory(volume):
+    """directory of a zarr array or SelectiveChunkVolume, or None."""
+    store_path = getattr(getattr(volume, "store", None), "path", None)
+    path = store_path or getattr(volume, "path", None)
+    return str(path) if path and os.path.isdir(str(path)) else None
+
+
+class SelectiveChunkVolume:
+    """Read-only zarr-like volume backed by selected full-depth spatial chunks."""
+
+    def __init__(self, path: str, shape, dtype, chunks, norm_stats=None, norm_mode: str = "global"):
+        self.path = os.path.abspath(path)
+        self.shape = tuple(int(value) for value in shape)
+        self.source_dtype = np.dtype(dtype)
+        self.norm_stats = None if norm_stats is None else tuple(float(value) for value in norm_stats)
+        self.norm_mode = str(norm_mode)
+        self.normalized = self.norm_stats is not None
+        self.dtype = np.dtype(np.float32) if self.normalized else self.source_dtype
+        self.chunks = tuple(int(value) for value in chunks)
+        self.ndim = 3
+        self.nbytes = int(np.prod(self.shape)) * self.dtype.itemsize
+        self._cache: dict[tuple[int, int], np.ndarray] = {}
+        self._source = None
+        self.cache_misses = 0
+
+    @property
+    def cached_nbytes(self) -> int:
+        return sum(array.nbytes for array in self._cache.values())
+
+    def _open_source(self):
+        if self._source is None:
+            import zarr
+
+            self._source = zarr.open(self.path, mode="r")
+        return self._source
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_source"] = None
+        return state
+
+    def _prepare_array(self, array) -> np.ndarray:
+        array = np.asarray(array)
+        if self.normalized:
+            from .norm import scale_to_unit
+
+            mean, std, lower, upper = self.norm_stats
+            array = array.astype(np.float32)
+            if std != 0:
+                array = scale_to_unit((array - mean) / std, lower, upper, self.norm_mode).astype(np.float32)
+        return np.ascontiguousarray(array, dtype=self.dtype)
+
+    def _prepare_cached_array(self, array) -> np.ndarray:
+        return np.ascontiguousarray(array, dtype=self.source_dtype)
+
+    def _preload_forked(self, missing: list[tuple[int, int]]) -> bool:
+        """read uncompressed zarr v2 chunk files in forked processes; False when the store doesn't qualify.
+
+        threads stall on per-file work in this process, so separate readers fill one shared buffer instead.
+        """
+        global _FORK_JOB
+        import multiprocessing
+
+        try:
+            with open(os.path.join(self.path, ".zarray"), encoding="utf-8") as handle:
+                meta = json.load(handle)
+        except (OSError, ValueError):
+            return False
+        dtype = np.dtype(meta.get("dtype"))
+        if (meta.get("zarr_format") != 2 or meta.get("compressor") is not None or meta.get("filters")
+                or meta.get("order", "C") != "C" or dtype != self.source_dtype
+                or tuple(meta.get("chunks", ())) != self.chunks or tuple(meta.get("shape", ())) != self.shape
+                or meta.get("fill_value") is None or "fork" not in multiprocessing.get_all_start_methods()):
+            return False
+        depth, height, width = self.shape
+        chunk_y, chunk_x = self.chunks[1], self.chunks[2]
+        items, offset = [], 0
+        for cy, cx in missing:
+            h = min(chunk_y, height - cy * chunk_y)
+            w = min(chunk_x, width - cx * chunk_x)
+            items.append(((cy, cx), offset, (h, w)))
+            offset += depth * h * w * dtype.itemsize
+        buffer = mmap.mmap(-1, max(offset, 1))
+        workers = max(1, min(_PROCESS_PRELOAD_WORKERS, os.cpu_count() or 1))
+        bounds = np.linspace(0, len(items), workers * 8 + 1).astype(int)
+        tasks = [(int(a), int(b)) for a, b in zip(bounds[:-1], bounds[1:]) if b > a]
+        _FORK_JOB = {
+            "items": items, "buffer": buffer, "depth": depth, "chunk_z": self.chunks[0],
+            "chunk_y": chunk_y, "chunk_x": chunk_x, "dtype": dtype, "root": self.path,
+            "sep": meta.get("dimension_separator") or ".", "fill": meta["fill_value"],
+        }
+        try:
+            with multiprocessing.get_context("fork").Pool(workers) as pool:
+                done = sum(pool.imap_unordered(_fork_read, tasks))
+        except Exception as exc:
+            print(f"[selective-cache] forked preload failed ({exc}); using threads", flush=True)
+            return False
+        finally:
+            _FORK_JOB = None
+        if done != len(items):
+            return False
+        for key, start, (h, w) in items:
+            array = np.ndarray((depth, h, w), dtype=dtype, buffer=buffer, offset=start)
+            array.setflags(write=False)
+            self._cache[key] = array
+        return True
+
+    def preload(self, spatial_chunks: Iterable[tuple[int, int]], source, workers: int = 8) -> None:
+        requested = sorted(set(spatial_chunks))
+        missing = [key for key in requested if key not in self._cache]
+        if not missing:
+            print(
+                f"[selective-cache] reuse {os.path.basename(self.path)}: "
+                f"{len(requested):,} chunks {self.cached_nbytes / 1024**3:.2f} GiB",
+                flush=True,
+            )
+            return
+
+        chunk_y, chunk_x = self.chunks[1], self.chunks[2]
+        height, width = self.shape[1], self.shape[2]
+
+        def load(key: tuple[int, int]):
+            cy, cx = key
+            y0, x0 = cy * chunk_y, cx * chunk_x
+            y1, x1 = min(y0 + chunk_y, height), min(x0 + chunk_x, width)
+            array = self._prepare_cached_array(source[:, y0:y1, x0:x1])
+            array.setflags(write=False)
+            return key, array
+
+        worker_count = max(1, min(int(workers), len(missing)))
+        if len(missing) >= _PROCESS_PRELOAD_MIN_CHUNKS and self._preload_forked(missing):
+            print(
+                f"[selective-cache] ready {os.path.basename(self.path)}: chunks={len(self._cache):,} "
+                f"ram={self.cached_nbytes / 1024**3:.2f} GiB (forked readers)",
+                flush=True,
+            )
+            return
+        print(
+            f"[selective-cache] preload {os.path.basename(self.path)}: "
+            f"new={len(missing):,} requested={len(requested):,} workers={worker_count}",
+            flush=True,
+        )
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            for index, (key, array) in enumerate(executor.map(load, missing), start=1):
+                self._cache[key] = array
+                if index % 1000 == 0 or index == len(missing):
+                    print(
+                        f"[selective-cache] {os.path.basename(self.path)} "
+                        f"{index:,}/{len(missing):,}",
+                        flush=True,
+                    )
+        print(
+            f"[selective-cache] ready {os.path.basename(self.path)}: "
+            f"chunks={len(self._cache):,} ram={self.cached_nbytes / 1024**3:.2f} GiB",
+            flush=True,
+        )
+
+    @staticmethod
+    def _unit_slice(value, size: int) -> slice:
+        if not isinstance(value, slice):
+            raise TypeError("selective chunk volumes require slice indexing")
+        start, stop, step = value.indices(size)
+        if step != 1:
+            raise ValueError("selective chunk volumes require unit-stride slices")
+        return slice(start, stop)
+
+    def __getitem__(self, item):
+        if not isinstance(item, tuple) or len(item) != 3:
+            raise TypeError("selective chunk volumes require three-dimensional slicing")
+        z_slice = self._unit_slice(item[0], self.shape[0])
+        y_slice = self._unit_slice(item[1], self.shape[1])
+        x_slice = self._unit_slice(item[2], self.shape[2])
+        out_shape = (
+            max(0, z_slice.stop - z_slice.start),
+            max(0, y_slice.stop - y_slice.start),
+            max(0, x_slice.stop - x_slice.start),
+        )
+        if any(size == 0 for size in out_shape):
+            return np.empty(out_shape, dtype=self.dtype)
+
+        chunk_y, chunk_x = self.chunks[1], self.chunks[2]
+        cy0, cy1 = y_slice.start // chunk_y, (y_slice.stop - 1) // chunk_y
+        cx0, cx1 = x_slice.start // chunk_x, (x_slice.stop - 1) // chunk_x
+        required = [
+            (cy, cx)
+            for cy in range(cy0, cy1 + 1)
+            for cx in range(cx0, cx1 + 1)
+        ]
+        missing = [key for key in required if key not in self._cache]
+        if missing:
+            self.cache_misses += 1
+            if self.cache_misses <= 3:
+                print(
+                    f"[selective-cache] WARNING {os.path.basename(self.path)} "
+                    f"miss={missing[:4]} slice={(z_slice, y_slice, x_slice)}; using zarr fallback",
+                    flush=True,
+                )
+            source = self._open_source()
+            return self._prepare_array(source[z_slice, y_slice, x_slice])
+
+        output = np.empty(out_shape, dtype=self.source_dtype)
+        for cy, cx in required:
+            cached = self._cache[(cy, cx)]
+            global_y0, global_x0 = cy * chunk_y, cx * chunk_x
+            ys, ye = max(y_slice.start, global_y0), min(y_slice.stop, global_y0 + cached.shape[1])
+            xs, xe = max(x_slice.start, global_x0), min(x_slice.stop, global_x0 + cached.shape[2])
+            output[
+                :,
+                ys - y_slice.start:ye - y_slice.start,
+                xs - x_slice.start:xe - x_slice.start,
+            ] = cached[
+                z_slice,
+                ys - global_y0:ye - global_y0,
+                xs - global_x0:xe - global_x0,
+            ]
+        return self._prepare_array(output)
+
+
+_CACHE_REGISTRY: dict[str, SelectiveChunkVolume] = {}
+
+
+def get_selective_chunk_volume(source, norm_stats=None, norm_mode: str = "global") -> SelectiveChunkVolume:
+    path = os.path.abspath(str(source.store.path))
+    cached = _CACHE_REGISTRY.get(path)
+    if cached is None:
+        cached = SelectiveChunkVolume(
+            path,
+            source.shape,
+            source.dtype,
+            source.chunks,
+            norm_stats=norm_stats,
+            norm_mode=norm_mode,
+        )
+        _CACHE_REGISTRY[path] = cached
+    elif (
+        cached.shape != tuple(source.shape)
+        or cached.source_dtype != np.dtype(source.dtype)
+        or cached.chunks != tuple(source.chunks)
+    ):
+        raise RuntimeError(f"selective cache metadata changed for {path}")
+    elif cached.norm_stats != (
+        None if norm_stats is None else tuple(float(value) for value in norm_stats)
+    ) or (norm_stats is not None and cached.norm_mode != str(norm_mode)):
+        # a later arm normalizes the same volume differently (e.g. surface-anchored norm)
+        cached = SelectiveChunkVolume(
+            path,
+            source.shape,
+            source.dtype,
+            source.chunks,
+            norm_stats=norm_stats,
+            norm_mode=norm_mode,
+        )
+        _CACHE_REGISTRY[path] = cached
+    return cached

@@ -1,0 +1,79 @@
+#*.pth
+# keep MAE pretraining bases (warm-start weights) tracked despite the blanket *.pth ignore
+#!models/mae_*.pth
+*.npz
+# the patch-correlation study's Gram matrices (corr_study/, 182 MB) are the data behind its report
+!corr_study/**/*.npz
+.venv
+__pycache__/
+*.pyc
+*.tar
+ves_3zars.tar
+ves_zarrs*
+# cross-resolution tile stores are rebuilt by crossres/build_pairs.py; their meta.json files stay tracked
+crossres/pairs/**/pairs.zarr/
+.vscode/*
+_ves_tmp/
+PHerc0813_spiral_dataset/*
+# atlas extras are synced through R2 (assemble_test_segments.py --include-extras), never git
+tifxyz/atlas/
+masks/extras/
+surface_labels/
+output/
+crossres/
+# run outputs stay local to keep LFS under quota; already-tracked files are unaffected
+nader-fork/
+reader-v2/
+reader-v3/
+villa-ink/
+hecate/
+runs_smoke/
+models/runs_smoke/
+# cue maps are LFS-sized and rebuilt by assemble_*_segments.py --mix26 (utils/build_domain_cues.py / old/build_pair_cues.py)
+cue_*/
+# per-run evaluation figures
+eval_figs/
+# local run outputs, too large for GitHub
+runs_corr/
+models/ckpt_002000.pth
+trace3b/
+logs_*/
+**/runs*/
+/models/*
+!/models/mae_nnunet_192_campaign34_early_gated_fiber_native96_surfacenorm_campaign40_2k.pth
+!/models/mae_nnunet_192_campaign34_early_gated_fiber_native96_surfacenorm_campaign40_2k.complete.json
+!/models/native_noise_bank_192.npy
+!/models/native_noise_bank_192.json
+/tifxyz/3_new/auto_grown_20261012065803387_abf/
+/tifxyz/3_new/auto_grown_20261012073244544_abf/
+/tifxyz/3_new/auto_grown_20261012081237255_abf/
+/tifxyz/3_new_offset/auto_grown_20261012073244544_abf_p29/
+/tifxyz/PRIZESHEET_NEW/
+/tifxyz/PRIZESHEET_NEW_11_7/
+/tifxyz/PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi/
+/tifxyz/auto_grown_20260921094413486_flatboi/
+/tifxyz/auto_grown_20261012065803387_straight_abf/
+/tifxyz/auto_grown_20261012065803387_straight_abf_m28/
+/tifxyz/auto_grown_20261012065803387_straightened2_abf/
+/tifxyz/auto_grown_20261012065803387_straightened2_abf_in_1/
+/tifxyz/auto_grown_20261012065803387_straightened2_abf_out_1/
+/tifxyz/auto_grown_20261012065803387_straightened2_abf_out_2/
+/tifxyz/auto_grown_20261012065803387_straightened2_abf_out_3/
+/tifxyz/auto_grown_20261012065803387_straightened2_abf_out_4/
+/tifxyz/auto_grown_20261012065803387_straightened2_abf_out_5/
+/tifxyz/auto_grown_20261012073244544_abf/
+/tifxyz/auto_grown_20261012073244544_abf_offset_source/
+/tifxyz/auto_grown_20261014084609861_straight_abf/
+/tifxyz/fiber_only_20261029d_flatboi/
+/tifxyz/fiber_only_20261029d_flatboi_in_1/
+/tifxyz/fiber_only_20261029d_flatboi_in_2/
+/tifxyz/fiber_only_20261029d_flatboi_out_1/
+/tifxyz/fiber_only_20261029d_flatboi_out_2/
+/tifxyz/fiber_only_20261030_flatboi/
+/tifxyz/fiber_only_20261102b_flatboi/
+/tifxyz/fiber_only_20261102b_flatboi_PRIZESHEET/
+/tifxyz/fiber_only_20261102b_flatboi_corrected/
+/tifxyz/fiber_only_abf2_20261029c_flatboi/
+/tifxyz/fiber_only_abf2_20261029c_flatboi_m28/
+/tifxyz/fiber_only_abf2_20261029c_flatboi_p28/
+/tifxyz/fiber_tps_20261028_flatboi/
