@@ -4,7 +4,7 @@
 precomputed asf_morph map as a fourth input head (flat in 20% of the samples of 0846A, 0009B and 0172, always on the other scrolls), dual scale, strong nnPU and the text-region gate,
 on the mix28 corpus (12 PHerc0846A sheets + the labelled patches of PHerc0009B, 1447, 0841, 0172, 343 first letters, 0139, 1667, 0500P2
 and PHerc0306B; utils/mix6.py; a donor without ink or train mask is skipped), 4 epochs, seed 17. reader-v3 and v8-in train on the same corpus.
-The fiber_only_20261102b_flatboi_PRIZESHEET prize sheet is rendered at the end and never trained on; the 0846A sheets lose their papyrus within
+The PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi prize sheet is rendered at the end and never trained on; the 0846A sheets lose their papyrus within
 12 voxels of it plus the model's context reach, and training refuses to start until those masks match the prize sheet.
 Checkpoints go to models/runs/<run>/ (final.pth, the last epoch, is the one ensemble_eval.ipynb reads)
 and TensorBoard to runs/<run>/; an existing run is never overwritten (a _2, _3 ... suffix is used).

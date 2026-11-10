@@ -1,4 +1,4 @@
-"""Fine-tune reader-v3 on the mix28 corpus (utils/mix6.py) for 4000 optimizer steps, from the released checkpoint.
+"""Fine-tune reader-v3 on the mix28 corpus (utils/mix6.py) for a 4000-step schedule (utils/queue_ps3.sh stops it after step 2000), from the released checkpoint.
 (mix28 = the corpus of all three trainings: the 14 PHerc0846A sheets + the labelled donor patches of PHerc0009B, 0343, 1447, 0841,
 0172, 0139, 1667, 0500P2 and PHerc0306B; a donor still without ink or train mask is skipped.
 --corpus mix26 | mix25 | mix22 | mix18 | 0846a trains another corpus on the same staged data; --steps and
@@ -26,7 +26,7 @@ prep   stages every corpus segment the way the reader reads a corpus: a 21-layer
 train  batch 13 (0846A 4, each of the other scrolls 1, the slots of a missing scroll go to 0009B; sgd, lr 0.003, 200 warmup steps), 384 px
        tiles, fp16; checkpoints every 1000 steps.
 
-output: reader-v3/runs/mix28/ckpt_004000.pth (printed at the end; a checkpoint every 1000 steps). ensemble_eval.ipynb and 0846A_eval.ipynb read it through
+output: reader-v3/runs/mix28_ps3/ckpt_<step>.pth (printed at the end; a checkpoint every 1000 steps; the models used are steps 1000 and 2000). ensemble_eval.ipynb and 0846A_eval.ipynb read it through
 utils/mix6.MODEL_PATHS.
 Needs the corpus data (python3 assemble_training_segments.py --mix28), git, uv and a GPU.
 """

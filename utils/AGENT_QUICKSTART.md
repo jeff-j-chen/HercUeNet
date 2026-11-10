@@ -18,8 +18,9 @@ caches are in `utils/` (`norm_cache.json`, `surface_anchor_cache.json`, `depth_r
   `is_labelled`, `corpus_segments`, `trained_domains`); it trains as soon as its labels are drawn (255 trains, 119 hard negative, black unused).
 - **mix26** (frozen; `--corpus mix26` of the fine-tunes): the 25 patches before 2026-11-04. The interim models (cue_dropout `cue_dropout_labelsv6_mix26/epoch_2.pth`, reader-v3 / v8-in on the 18-patch
   **mix18**) are `MIX26_MODEL_PATHS`; the evaluation notebooks default to them until the mix28 trainings have run.
-- The PRIZE sheet is `fiber_only_20261102b_flatboi_PRIZESHEET` (alias 20261102120000, rendered rotated 180 degrees). It is the only prize sheet: every earlier one is
-  superseded and no longer assembled. NOTHING trains or validates on it.
+- The PRIZE sheet is `PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi` (alias 20261109120000, the 2026-11-09 remake of `PRIZESHEET_NEW`, rendered upright). It is the only prize sheet: every earlier one
+  (`fiber_only_20261102b_flatboi_PRIZESHEET`, `PRIZESHEET_NEW`) is superseded and kept only as an evaluation render. NOTHING trains or validates on it.
+  `RUN_TAG` in `utils/mix6.py` (`_ps3`) names the runs made against it; `_ps2` runs were made against `PRIZESHEET_NEW`, untagged ones against the 2026-11-02 sheet.
 
 ## Prize-sheet exclusion (must be ready before any training)
 
@@ -38,15 +39,15 @@ python3 -m utils.mix6                                 # the same read-only repor
 Per scroll: volume + mask (`ves_zarrs2/<id>.zarr`, `masks/<id>.png`), norm, surface detection (`surface_labels/<id>/`; PHerc1447 is a flat surface at its
 measured centre layer), surface anchors, the prize-sheet exclusions, and 3 depths of asf cues (`cue_asf_morph`, `_dm1`, `_dp1`; the prize sheet only the first).
 The PHerc0846A sheets (`MESHES_0846A` in `assemble_training_segments.py`) are rendered from their tifxyz meshes; the fibre sheets as uint8 extras (mask in `masks/extras/`,
-linked into `masks/`). Labels (`dilated_inklabels/`, `train_masks/`) and meshes (`tifxyz/`) are tracked in git.
+linked into `masks/`). Labels (`dilated_inklabels/`, `train_masks/`) and the meshes of the other scrolls (`tifxyz/`) are tracked in git; the PHerc0846A meshes (incl. the prize sheet) are in the passphrase-protected `utils/tifxyz_0846A.tar.enc` (the assembler prompts for the passphrase or reads `TIFXYZ_PASSPHRASE`, `python3 -m utils.unlock_tifxyz_0846A` extracts it by hand, an empty or wrong answer skips the 0846A sheets).
 Aliases like `20261012065815` are symlinks to the render `20261012065814`: the label/cue name is the alias, the zarr/mask name is the render id.
-`--rebuild-cues` rebuilds existing cue maps (they are kept otherwise). The norm and anchor caches are `utils/norm_cache.json` and `utils/surface_anchor_cache.json`.
+`--rebuild-cues` rebuilds existing cue maps (they are kept otherwise). After a new prize sheet only the cues of 0846A sheets whose zone mask changed are rebuilt (each cue stores a `<id>.zone` digest of the zone it was built from; a cue without one falls back to file times); a sheet's three depth shifts come from one volume read (`precomputed_asf.build_shifts`, the read is ~all of the time), 8 sheets in parallel (`--workers`). The norm and anchor caches are `utils/norm_cache.json` and `utils/surface_anchor_cache.json`.
 
 ## The queue
 
 ```bash
-tmux new -d -s mix28 'bash /vesuvius/utils/queue_mix28.sh'   # reader-v3 -> v8-in -> corpus check -> cue_dropout; logs in logs_mix28/
-tmux new -d -s mix28_eval 'bash /vesuvius/utils/queue_mix28_eval.sh'   # waits for the session above, then ensemble_eval + 0846A_eval (reader-v3)
+tmux new -d -s queue_ps3 'bash /vesuvius/utils/queue_ps3.sh'   # waits for tmux prep_ps3 (utils.mix6 --build), then check -> cue_dropout (4 ep) -> reader-v3 (4000-step schedule, stopped at 2000) -> v8-in (4-epoch schedule, stopped after epoch 2)
+                                                              # -> 3 ensembles (output/ensemble/mix28_ps3_*) -> ensemble 3 on every training sheet + utils/label_overlay_figures; logs in logs_ps3/
 ```
 
 ## 1. cue_dropout_labelsv6_mix28: `train.py`
@@ -62,23 +63,23 @@ An existing run is never overwritten (`_2`, `_3`). `utils/config.py` `apply_mix6
 ## 2. reader-v3 fine-tune: `finetune_readerv3.py`
 
 ```bash
-python3 finetune_readerv3.py            # setup -> prep -> train, mix28, 4000 optimizer steps, batch 13, a checkpoint every 1000
+python3 finetune_readerv3.py            # setup -> prep -> train, mix28, 2000 optimizer steps, batch 13, a checkpoint every 1000
 ```
 
 `setup` clones `DomRusso2/reader-v3` and the koine_machines training code (ScrollPrize/villa, sparse) into `reader-v3/` and `villa-ink/` at pinned commits, builds
 `reader-v3/.venv` with uv from `requirements_readerv3.txt` and downloads `reader-v3/reader-v3.pth` from Hugging Face. `prep` stages 21-layer crops around each scroll's
 surface layer (`reader-v3/data/mix25`, a historical folder name shared by every corpus; a segment is re-staged when its label, train mask, mask or exclusion changes).
-Output `reader-v3/runs/mix28/ckpt_004000.pth` (steps 1000 / 2000 / 3000 are `ckpt_001000.pth` ... `ckpt_003000.pth`).
+Output `reader-v3/runs/mix28_ps3/ckpt_002000.pth` (step 1000 is `ckpt_001000.pth`).
 uv's cache goes to `_ves_tmp/uv_cache` (the container's home disk is small; set `UV_CACHE_DIR` to change it).
 
 ## 3. v8-in fine-tune: `finetune_v8in.py`
 
 ```bash
-python3 finetune_v8in.py                # setup -> stage -> train -> export, mix28, 4 epochs (cosine decay over the same 4)
+python3 finetune_v8in.py                # setup -> stage -> train -> export, mix28, 4-epoch cosine schedule (utils/queue_ps3.sh stops it after epoch 2)
 ```
 
 `setup` clones `jeff-j-chen/nader-fork` (git lfs pulls the v8-in weights), builds `nader-fork/.venv` from `requirements_v8in.txt`. `stage` writes the central 24 layers as tiffs and the label/mask PNGs
-to `nader-fork/runs/v8in_mix25_data/data` (also a historical name; layers are re-staged when the blanked prize-sheet zone changes). Output `nader-fork/runs/v8in_mix28_4ep/model/`
+to `nader-fork/runs/v8in_mix25_data/data` (also a historical name; layers are re-staged when the blanked prize-sheet zone changes). Output `nader-fork/runs/v8in_mix28_4ep_ps3/` (checkpoints `runs/*/checkpoints/trained-epoch<N>.ckpt`; `model/` only for a run that is not stopped)
 (exported epoch 4; the Lightning checkpoints are under `runs/*/checkpoints/`, 0-based: `trained-epoch<N>.ckpt` after every epoch, `epochepoch=3.ckpt` is the last).
 
 ## Labels differ per model
@@ -90,7 +91,7 @@ to `nader-fork/runs/v8in_mix25_data/data` (also a historical name; layers are re
 
 ## Evaluate
 
-- `ensemble_eval.ipynb`: the three last-epoch models on the prize sheet, caches each prediction under `output/ensemble/mix26/<sheet>/cache/` (delete a file to recompute), saves the 3x2 grid
+- `ensemble_eval.ipynb`: the three last-epoch models on the prize sheet, caches each prediction under `output/ensemble/<ENSEMBLE_SUBDIR>/<sheet>/cache/` (delete a file to recompute), saves the 3x2 grid
   (reader-v3 base | reader-v3 / cue_dropout | v8-in / z-score | product of the three) and `product_ct_2x2.png` (product composite | ct composite view x3). Headless: `python3 utils/run_notebook.py ensemble_eval.ipynb`.
 - `0846A_eval.ipynb`: set `CHECKPOINT` to any of the three models (cue_dropout `.pth`, reader-v3 `.pth`, v8-in model folder or `.ckpt`; default the reader-v3 fine-tune); the kind is detected, the figures are the same.
   Headless without the remaining quick patches: `python3 utils/run_notebook.py 0846A_eval.ipynb --keep-going --skip '^quick_patch_outputs ='`.
@@ -101,7 +102,7 @@ to `nader-fork/runs/v8in_mix25_data/data` (also a historical name; layers are re
 ```bash
 reader-v3/.venv/bin/python - <<'EOF'      # hecate needs an unnormalised uint8 (Z, Y, X) array
 import numpy as np, zarr
-a = np.asarray(zarr.open("ves_zarrs2/fiber_only_20261102b_flatboi_PRIZESHEET.zarr", mode="r")[:])
+a = np.asarray(zarr.open("ves_zarrs2/PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi.zarr", mode="r")[:])
 np.save("_ves_tmp/render_u8.npy", np.clip(a, 0, 255).astype(np.uint8))
 EOF
 TMPDIR=/vesuvius/_ves_tmp reader-v3/.venv/bin/python hecate/hecate.py --checkpoint hecate/hecate_9.6um.pth \

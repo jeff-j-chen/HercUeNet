@@ -83,70 +83,108 @@ def _first_existing(*paths):
     return next((p for p in paths if os.path.exists(p)), paths[0])
 
 
-def build(scroll_id, force: bool = False, config=None) -> str:
-    """write <cue_dir>/<volume id>.npy for one scroll (cue_dir from `config`, default the best run's)."""
-    import zarr
+def read_zone(path) -> np.ndarray:
     from PIL import Image
 
+    Image.MAX_IMAGE_PIXELS = None
+    return np.array(Image.open(path).convert("L")) > 0
+
+
+def zone_digest(zone: np.ndarray) -> str:
+    """identifies a prize-sheet zone mask; stored next to every cue built from it (<volume id>.zone)."""
+    import hashlib
+
+    return hashlib.sha1(str(zone.shape).encode() + np.packbits(zone).tobytes()).hexdigest()
+
+
+def build(scroll_id, force: bool = False, config=None) -> str:
+    """write <cue_dir>/<volume id>.npy for one scroll (cue_dir from `config`, default the best run's)."""
     from utils.config import Config, apply_best_run
 
-    Image.MAX_IMAGE_PIXELS = None
-    cv2.setNumThreads(6)
     if config is None:
         config = Config()
         apply_best_run(config)
-    cue_dir = str(config.data.cue_dir)
-    volume_id = volume_id_of(config, scroll_id)
-    out_path = os.path.join(cue_dir, f"{volume_id}.npy")
-    if os.path.isfile(out_path) and not force:
+    return build_shifts(scroll_id, {0: config}, force)
+
+
+def build_shifts(scroll_id, configs: dict, force: bool = False) -> str:
+    """write the cue of every depth shift in `configs` (shift -> config; same scroll, zone and frame) from ONE read of the volume.
+    The read of the 8-layer windows dominates (the cue itself takes seconds), so a sheet's three shifts cost one pass over the
+    layers they need."""
+    import zarr
+    from PIL import Image
+
+    Image.MAX_IMAGE_PIXELS = None
+    cv2.setNumThreads(6)
+    first = next(iter(configs.values()))
+    volume_id = volume_id_of(first, scroll_id)
+    todo = {}
+    for shift, config in configs.items():
+        out_path = os.path.join(str(config.data.cue_dir), f"{volume_id_of(config, scroll_id)}.npy")
+        if force or not os.path.isfile(out_path):
+            todo[shift] = (config, out_path)
+    if not todo:
         return f"{volume_id}: exists"
     import nonml_ink as nm
 
-    volume = zarr.open(os.path.join(config.data.zarr_path, f"{volume_id}.zarr"), mode="r")
+    volume = zarr.open(os.path.join(first.data.zarr_path, f"{volume_id}.zarr"), mode="r")
     depth_count, height, width = (int(v) for v in volume.shape)
     mask_path = _first_existing(f"masks/{scroll_id}.png", f"masks/extras/{scroll_id}.png")
     mask = np.array(Image.open(mask_path).convert("L")) > 0
     frame = np.zeros((height, width), dtype=bool)
     h, w = min(height, mask.shape[0]), min(width, mask.shape[1])
     frame[:h, :w] = mask[:h, :w]
-    zone_dir = str(getattr(config.data, "cue_exclusion_dir", "") or "")
+    zone_dir = str(getattr(first.data, "cue_exclusion_dir", "") or "")
+    digest = ""
     if zone_dir:
         # the prize-sheet zone leaves the frame: every term of the cue is computed over the frame only (nm.fill starts from x * m)
         zone_path = os.path.join(zone_dir, f"{scroll_id}.png")
         if not os.path.isfile(zone_path):
             raise FileNotFoundError(f"{zone_path} (python3 -m utils.holdout_exclusion)")
-        zone = np.array(Image.open(zone_path).convert("L")) > 0
+        zone = read_zone(zone_path)
         if zone.shape != frame.shape:
             raise ValueError(f"{zone_path}: shape {zone.shape} differs from the volume frame {frame.shape}")
+        digest = zone_digest(zone)
         frame &= ~zone
-    surface_dir = _first_existing(os.path.join(config.data.surface_label_dir, str(scroll_id)),
-                                  os.path.join(config.data.surface_label_dir, "extras", str(scroll_id)))
+    surface_dir = _first_existing(os.path.join(first.data.surface_label_dir, str(scroll_id)),
+                                  os.path.join(first.data.surface_label_dir, "extras", str(scroll_id)))
     depth = np.load(os.path.join(surface_dir, "depth.npy"), mmap_mode="r")
     confidence = np.load(os.path.join(surface_dir, "confidence.npy"), mmap_mode="r")
-    offset = int(config.data.surface_window_offset_by_scroll.get(
-        int(scroll_id) if str(scroll_id).isdigit() else scroll_id, config.data.surface_window_offset))
+    key = int(scroll_id) if str(scroll_id).isdigit() else scroll_id
+    offsets = {shift: int(config.data.surface_window_offset_by_scroll.get(key, config.data.surface_window_offset))
+               for shift, (config, _) in todo.items()}
     valid_depth = np.asarray(depth[::16, ::16]).astype(np.int64)
     valid_depth = valid_depth[valid_depth != 255]
-    fallback = int(np.median(valid_depth)) if valid_depth.size else config.data.train_d_start
-    f = nm.F
-    h2, w2 = height // f, width // f
-    stack = np.zeros((WINDOW, height, width), dtype=np.float32)
+    fallback = int(np.median(valid_depth)) if valid_depth.size else first.data.train_d_start
+    stacks = {shift: np.zeros((WINDOW, height, width), dtype=np.float32) for shift in todo}
     for y0 in range(0, height, BAND):
         y1 = min(height, y0 + BAND)
-        block = np.asarray(volume[:, y0:y1, :], dtype=np.float32)
         d = np.asarray(depth[y0:y1, :width]).astype(np.int64)
         c = np.asarray(confidence[y0:y1, :width])
         centre = np.where((d != 255) & (c > 0), d, fallback)
-        start = np.clip(centre - (WINDOW - 1) // 2 + offset, 0, max(depth_count - WINDOW, 0))
-        for k in range(WINDOW):
-            index = np.clip(start + k, 0, depth_count - 1)
-            stack[k, y0:y1] = np.take_along_axis(block, index[None], axis=0)[0]
-    cue = cue_from_window(stack, frame)
-    os.makedirs(cue_dir, exist_ok=True)
-    temporary = out_path + ".tmp.npy"
-    np.save(temporary, cue)
-    os.replace(temporary, out_path)
-    return f"{volume_id}: {height}x{width}"
+        starts = {shift: np.clip(centre - (WINDOW - 1) // 2 + offset, 0, max(depth_count - WINDOW, 0))
+                  for shift, offset in offsets.items()}
+        low = min(int(start.min()) for start in starts.values())
+        high = min(depth_count, max(int(start.max()) for start in starts.values()) + WINDOW)
+        block = np.asarray(volume[low:high, y0:y1, :], dtype=np.float32)
+        for shift, start in starts.items():
+            for k in range(WINDOW):
+                index = np.clip(start + k, 0, depth_count - 1) - low
+                stacks[shift][k, y0:y1] = np.take_along_axis(block, index[None], axis=0)[0]
+    for shift, (config, out_path) in todo.items():
+        cue = cue_from_window(stacks.pop(shift), frame)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        temporary = out_path + ".tmp.npy"
+        np.save(temporary, cue)
+        os.replace(temporary, out_path)
+        stamp = out_path[:-len(".npy")] + ".zone"
+        if digest:
+            with open(stamp + ".tmp", "w") as handle:
+                handle.write(digest + "\n")
+            os.replace(stamp + ".tmp", stamp)
+        elif os.path.isfile(stamp):
+            os.remove(stamp)
+    return f"{volume_id}: {height}x{width}, shifts {sorted(todo)}"
 
 
 def _build(args):

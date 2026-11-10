@@ -29,10 +29,11 @@ patch-correlation study (runs_corr/report/summary.md).
 Every trained 0846A sheet loses its papyrus near the prize sheet (utils/holdout_exclusion.py: cue_dropout 12 vx + its context
 reach, reader-v3 18 vx, v8-in 25 vx); the trainings refuse to start until those masks were computed against HOLDOUT_NAME.
 
-The prize sheet is fiber_only_20261102b_flatboi_PRIZESHEET (alias 20261102120000, rendered rotated 180 degrees, never trained or
-validated on) and the only prize sheet that is assembled: every earlier attempt (straightened2, fiber_only_20261029d_flatboi, the
-20261030 / 20261102b renderings) is superseded. `assemble_training_segments.py --mix26` sets up exactly mix26's 25 trained patches +
-this sheet = 26.
+The prize sheet is PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi
+(alias 20261109120000, the 2026-11-09 remake of PRIZESHEET_NEW, rendered upright, never trained or validated on) and the only prize
+sheet that is assembled: every earlier one (straightened2, fiber_only_20261029d_flatboi, the 20261030 / 20261102b renderings,
+fiber_only_20261102b_flatboi_PRIZESHEET and PRIZESHEET_NEW of 2026-11-06) is superseded and stays on disk as an evaluation render.
+`assemble_training_segments.py --mix28` sets up exactly mix28's 28 registered patches + this sheet = 29.
 
 `python3 -m utils.mix6` prints the state of every artifact the three trainings read (read-only);
 `--build` makes the missing derived ones (flat 1447 surfaces, surface anchors, prize-sheet exclusions, 3 depths of asf cues).
@@ -82,13 +83,16 @@ CUE_TRAIN_0846A = tuple(alias for alias in TRAIN_0846A if alias not in CUE_DROPP
 # from the domains it helps on
 CUE_DROPOUT_BY_DOMAIN = {"pherc0846a": 0.2, "pherc0009b": 0.2, "pherc0172": 0.2}
 CUE_DROPOUT_OTHER = 1.0
-# the prize sheet (the only one assembled): rendered and predicted, never trained or validated on. PRIZESHEET_NEW (2026-11-06) extends the
-# previous prize sheet fiber_only_20261102b_flatboi_PRIZESHEET (OLD_PRIZE_SHEET, alias 20261102120000), which stays on disk for comparison;
-# its mesh grid is the old one turned 180 degrees, i.e. already upright, so it is not in ROTATE_180
+# the prize sheet (the only one assembled): rendered and predicted, never trained or validated on. It is the 2026-11-09 remake of
+# PRIZESHEET_NEW (alias 20261106120000, PS2_*) which extends the 2026-11-02 sheet fiber_only_20261102b_flatboi_PRIZESHEET
+# (OLD_PRIZE_SHEET, alias 20261102120000); both stay on disk for comparison. Its mesh grid is upright like PRIZESHEET_NEW's, so it is not
+# in ROTATE_180
 OLD_PRIZE_SHEET = "fiber_only_20261102b_flatboi_PRIZESHEET"
 OLD_HOLDOUT = 20261102120000
-PRIZE_SHEET = "PRIZESHEET_NEW"
-HOLDOUT = 20261106120000
+PS2_PRIZE_SHEET = "PRIZESHEET_NEW"
+PS2_HOLDOUT = 20261106120000
+PRIZE_SHEET = "PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi"
+HOLDOUT = 20261109120000
 HOLDOUT_RENDER = PRIZE_SHEET
 HOLDOUT_NAME = PRIZE_SHEET
 FIBER_RENDERS = (PRIZE_SHEET, *(f"{FIBER_NEIGHBOUR_BASE}_{suffix}" for suffix in FIBER_NEIGHBOURS.values()))
@@ -242,13 +246,18 @@ ASSEMBLER_NAMES = (*TRAINING_NAMES, HOLDOUT_NAME)
 
 
 # where the trainings of the default corpora leave their model: cue_dropout on CORPUS, the two fine-tunes on FINETUNE_CORPUS.
-# RUN_TAG marks the trainings made against PRIZESHEET_NEW (their exclusion masks, cues and staged data); the runs without it were made
-# against the previous prize sheet and stay on disk (models/runs/cue_dropout_labelsv6_mix28, reader-v3/runs/mix28, nader-fork/runs/v8in_mix28_4ep)
-RUN_TAG = "_ps2"
+# RUN_TAG marks the trainings made against the current prize sheet (their exclusion masks, cues and staged data). _ps3 = the 2026-11-09
+# remake; the runs tagged _ps2 were made against PRIZESHEET_NEW and the runs without a tag against the 2026-11-02 sheet; they stay on disk
+# (models/runs/cue_dropout_labelsv6_mix28_ps2, reader-v3/runs/mix28_ps2, nader-fork/runs/v8in_mix28_4ep_ps2; their schedules were 4000 steps / 4 epochs, cut at step 2000 / epoch 1)
+RUN_TAG = "_ps3"
 CUE_DROPOUT_RUN = f"cue_dropout_labelsv6_{CORPUS}{RUN_TAG}"
 READER_RUN = f"{FINETUNE_CORPUS}{RUN_TAG}"
+# the fine-tunes keep the learning-rate schedule of a 4000-step / 4-epoch run; utils/queue_ps3.sh stops them once step READER_STOP_STEPS /
+# epoch V8IN_STOP_EPOCHS is written (the weights equal the full run's at that point)
 READER_STEPS = 4000
 V8IN_EPOCHS = 4
+READER_STOP_STEPS = 2000
+V8IN_STOP_EPOCHS = 2
 V8IN_RUN = f"v8in_{FINETUNE_CORPUS}_{V8IN_EPOCHS}ep{RUN_TAG}"
 # train.py also saves the weights after these epochs as models/runs/<run>/epoch_<n>.pth (next to best_model_*.pth and final.pth)
 CUE_SAVE_EPOCHS = (1, 2, 3, 4)
@@ -262,8 +271,8 @@ CUE_CHECKPOINT = CUE_EPOCH_PATHS[int(_cue_epoch)] if _cue_epoch else REPO / "mod
 # default trainings (not the best-validation checkpoint); they exist once utils/queue_mix28.sh has run
 MODEL_PATHS = {
     "cue_dropout": CUE_CHECKPOINT,    # train.py: final.pth = weights after the last epoch (4), or epoch_<n>.pth with VESUVIUS_CUE_EPOCH
-    "reader_v3": REPO / "reader-v3" / "runs" / READER_RUN / f"ckpt_{READER_STEPS:06d}.pth",    # finetune_readerv3.py, step 4000
-    "v8in": REPO / "nader-fork" / "runs" / V8IN_RUN / "model",                                # finetune_v8in.py, last epoch exported
+    "reader_v3": REPO / "reader-v3" / "runs" / READER_RUN / f"ckpt_{READER_STOP_STEPS:06d}.pth",    # finetune_readerv3.py, step 2000 of the 4000-step schedule
+    "v8in": REPO / "nader-fork" / "runs" / V8IN_RUN / "model",                                # finetune_v8in.py, exported only by a run that is not stopped early
 }
 # the interim models of the mix26 / mix18 corpora (cue_dropout stopped after epoch 2, reader-v3 and v8-in on mix18), kept for comparison
 MIX26_CUE_EPOCH_PATHS = {n: REPO / "models" / "runs" / "cue_dropout_labelsv6_mix26" / f"epoch_{n}.pth" for n in (1, 2, 3, 5)}
@@ -467,11 +476,20 @@ def _stale(path: Path, alias) -> bool:
 
 
 def _zone_newer(path: Path, alias) -> bool:
-    """a trained 0846A sheet's cue predates its prize-sheet zone (a new prize sheet or radius): it must be rebuilt."""
+    """a trained 0846A sheet's cue was not built from its current prize-sheet zone (a new prize sheet or radius): it must be rebuilt.
+    A cue with a <volume id>.zone digest (utils/precomputed_asf.py) is current while the zone mask is unchanged, whatever the file
+    times (a sheet far from a new prize sheet keeps its cue); one without a digest compares file times."""
     if int(alias) not in SHEETS_0846A:
         return False
     zone = cue_zone_path(alias)
-    return not zone.is_file() or zone.stat().st_mtime > path.stat().st_mtime
+    if not zone.is_file():
+        return True
+    stamp = path.with_suffix(".zone")
+    if stamp.is_file() and stamp.stat().st_mtime >= path.stat().st_mtime:
+        from utils import precomputed_asf
+
+        return stamp.read_text().strip() != precomputed_asf.zone_digest(precomputed_asf.read_zone(zone))
+    return zone.stat().st_mtime > path.stat().st_mtime
 
 
 def cue_jobs(ids=None, force: bool = False) -> list[tuple[int, int, bool]]:
@@ -496,15 +514,30 @@ def _build_cue(job) -> str:
     return f"{alias} shift {delta:+d}: " + precomputed_asf.build(alias, force=force, config=cue_config(alias, delta))
 
 
-def ensure_cues(ids=None, workers: int = 4, force: bool = False) -> None:
+def _build_cue_sheet(job) -> str:
+    """all the listed depth shifts of one sheet from a single read of its volume."""
+    alias, shifts, force = job
+    os.chdir(REPO)
+    for path in (str(REPO), str(REPO / "old")):  # nonml_ink.py lives in old/
+        if path not in sys.path:
+            sys.path.insert(0, path)
+    from utils import precomputed_asf
+
+    return f"{alias}: " + precomputed_asf.build_shifts(alias, {delta: cue_config(alias, delta) for delta in shifts}, force=force)
+
+
+def ensure_cues(ids=None, workers: int = 8, force: bool = False) -> None:
     jobs = cue_jobs(ids, force)
-    print(f"[mix28] {len(jobs)} asf cue map(s) to build", flush=True)
+    sheets: dict[int, list[int]] = {}
+    for alias, delta, _ in jobs:
+        sheets.setdefault(alias, []).append(delta)
+    print(f"[mix28] {len(jobs)} asf cue map(s) to build ({len(sheets)} sheet(s), one volume read each)", flush=True)
     if not jobs:
         return
     import multiprocessing
 
-    with ProcessPoolExecutor(max_workers=max(1, min(workers, len(jobs))), mp_context=multiprocessing.get_context("spawn")) as pool:
-        for line in pool.map(_build_cue, jobs):
+    with ProcessPoolExecutor(max_workers=max(1, min(workers, len(sheets))), mp_context=multiprocessing.get_context("spawn")) as pool:
+        for line in pool.map(_build_cue_sheet, [(alias, tuple(shifts), True) for alias, shifts in sheets.items()]):
             print("[mix28] asf cue", line, flush=True)
 
 
@@ -587,7 +620,7 @@ def report(ids=None) -> list[str]:
     return problems
 
 
-def finalize(ids=None, workers: int = 4, rebuild_cues: bool = False) -> None:
+def finalize(ids=None, workers: int = 8, rebuild_cues: bool = False) -> None:
     """flat PHerc1447 surfaces, surface anchors, the prize-sheet exclusions (before the cues: the trained 0846A cues are built
     without the zone) and the 3 depths of asf cues for the given aliases (default all 26)."""
     os.chdir(REPO)
@@ -605,7 +638,7 @@ def finalize(ids=None, workers: int = 4, rebuild_cues: bool = False) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--build", action="store_true", help="make the missing derived artifacts (needs the zarrs and masks)")
-    parser.add_argument("--workers", type=int, default=4, help="parallel asf cue builds")
+    parser.add_argument("--workers", type=int, default=8, help="parallel asf cue builds (one sheet each)")
     parser.add_argument("--rebuild-cues", action="store_true", help="with --build: rebuild every asf cue, not only the missing ones")
     args = parser.parse_args()
     os.chdir(REPO)

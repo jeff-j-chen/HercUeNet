@@ -8,9 +8,9 @@ PHerc1447 windings are assembled from the released 24-layer Hugging Face renders
 depth_reversed.json are written directly in the reversed (canonical) depth order and carry
 attrs depth_flipped=true; there is no post-hoc flip.
 
-The 15 PHerc0846A sheets of MESHES_0846A (the 14 trained mix26 sheets and the fiber_only_20261102b_flatboi_PRIZESHEET prize sheet, the only
+The 15 PHerc0846A sheets of MESHES_0846A (the 14 trained mix26 sheets and the PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi prize sheet (the 2026-11-09 remake), the only
 prize sheet that is assembled) are rendered from their tifxyz meshes with assemble_test_segments.render_fragment (the
-fiber_only sheets like extras: uint8, mask under masks/extras linked into masks/; the prize sheet rotated 180 degrees) and get their flat
+fiber_only sheets like extras: uint8, mask under masks/extras linked into masks/; the prize sheet likewise, already upright) and get their flat
 depth-13 alias (symlinked zarr/mask/label/train mask, flat surface, norm, surface anchors) instead of steps 2-5. The same goes for the
 5 held-out PHerc0846A evaluation segments (EVAL_0846A: straightened2 out_4/out_5 and 3 quick patches, the latter rendered
 like extras: uint8, mask under masks/extras, no alias); a plain run assembles them, --mix28 does not.
@@ -49,7 +49,7 @@ PHerc0139 w041, PHerc1667 w013 (fine scan, read as its .matched sibling), PHerc0
 p306b_letters (the 41-layer claim-surface render of Prodigle/pherc0306b-first-letters, downloaded from Hugging Face and resampled like an
 8.64 um surface volume). p9b_642, p9b_639 and p306b_letters are hand-labelled like the other donors (a donor without ink or without train mask is skipped by the
 trainings, utils/mix6.py is_labelled). The 29th is the prize sheet
-fiber_only_20261102b_flatboi_PRIZESHEET (rotated 180 degrees). (The earlier mix25 corpus also had the PHerc0814 patches and 0139 title;
+PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi (upright; alias 20261109120000). (The earlier mix25 corpus also had the PHerc0814 patches and 0139 title;
 they stay assembled but are no longer set up.)
 Per scroll that is the volume + mask, norm, surface detection
 (PHerc1447: the flat surface at its measured centre layer; PHerc0846A: the flat depth-13 alias), surface anchors, the prize-sheet
@@ -82,11 +82,12 @@ TMP = "_ves_tmp"
 # constant across all PHerc0139 segments
 VOL9_NAME = "9.362um-1.2m-113keV-volume-20250728140407.zarr"
 
-# PHerc0846A (the submission scroll): the 14 trained mix26 sheets and the fiber_only_20261102b_flatboi_PRIZESHEET prize sheet (the only
+# PHerc0846A (the submission scroll): the 14 trained mix26 sheets and the current prize sheet (the only
 # prize sheet assembled), rendered from their tifxyz meshes (assemble_test_segments.render_fragment) and read through flat
 # depth-13 aliases (assemble_test_segments.make_flat_alias).
 # name (utils/mix6.py SHEETS_0846A / HOLDOUT_NAME) -> (render zarr id, flat alias, mesh under tifxyz/)
 VOL_0846A = (f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0", "14019,7726,7726")
+PRIZE_NAME = "PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi"  # utils/mix6.py PRIZE_SHEET
 MESHES_0846A = {
     "auto_grown_20260927134928530_abf": (
         "20260927134928", "20260927134931", "quick_patches_from_D/PHerc0846A/auto_grown_20260927134928530_abf"),
@@ -100,11 +101,10 @@ MESHES_0846A = {
        for suffix, render, alias in (
            ("in_1", "20261012065816", "20261012065817"), ("out_1", "20261012065818", "20261012065819"),
            ("out_2", "20261012065820", "20261012065821"), ("out_3", "20261012065822", "20261012065823"))},
-    # the PRIZE sheet (2026-11-06 PRIZESHEET_NEW, the extension of the previous prize sheet): the only prize sheet that is assembled, never
-    # trained or validated on. It renders like assemble_test_segments extras (zarr id = mesh name, uint8, mask under masks/extras linked
-    # into masks/ for the alias). Its mesh grid is the previous prize sheet's turned 180 degrees, so it is upright without ROTATE_180.
-    # The previous prize sheet is kept as an evaluation render (EVAL_PRIZE_OLD)
-    "PRIZESHEET_NEW": ("PRIZESHEET_NEW", "20261106120000", "PRIZESHEET_NEW"),
+    # the PRIZE sheet (the 2026-11-09 remake of PRIZESHEET_NEW): the only prize sheet that is assembled, never trained or validated on. It
+    # renders like assemble_test_segments extras (zarr id = mesh name, uint8, mask under masks/extras linked into masks/ for the alias) and
+    # is upright without ROTATE_180 like PRIZESHEET_NEW. The earlier prize sheets are kept as evaluation renders (EVAL_PRIZE_OLD).
+    PRIZE_NAME: (PRIZE_NAME, "20261109120000", PRIZE_NAME),
     # the 4 fibre neighbour sheets of straightened2 / fiber_only_20261029d_flatboi (train only), rendered as extras like the prize sheet
     **{f"fiber_only_20261029d_flatboi_{suffix}": (
         f"fiber_only_20261029d_flatboi_{suffix}", alias, f"fiber_only_20261029d_flatboi_{suffix}")
@@ -118,7 +118,7 @@ MESHES_0846A = {
         "fiber_only_abf2_20261029c_flatboi_p28", "20261029130002", "fiber_only_abf2_20261029c_flatboi_p28"),
     "auto_grown_20260921094413486_flatboi": ("20260921094413", "20260921094415", "auto_grown_20260921094413486_flatboi"),
 }
-EXTRAS_0846A = {name for name in MESHES_0846A if name.startswith("fiber_only_")} | {"PRIZESHEET_NEW"}
+EXTRAS_0846A = {name for name in MESHES_0846A if name.startswith("fiber_only_")} | {PRIZE_NAME}
 FRAGMENTS_0846A = [(render, mesh, *VOL_0846A) for render, _alias, mesh in MESHES_0846A.values()]
 FLAT_ALIASES_0846A = {render: alias for render, alias, _mesh in MESHES_0846A.values()}
 # PHerc0846A held-out evaluation segments of 0846A_eval.ipynb (HOLDOUT_NAMES there), never trained on; assembled by a plain run, not by --mix28.
@@ -129,12 +129,10 @@ EVAL_MESHES_0846A = {
 }
 # quick patches render like assemble_test_segments extras: zarr id = mesh folder name, uint8, mask under masks/extras
 EVAL_QUICK_0846A = ("auto_grown_20260926074031926_abf", "auto_grown_20260927143929299_abf", "auto_grown_20260927154033403_abf")
-# the previous prize sheet (fiber_only_20261102b_flatboi_PRIZESHEET, rotated 180 degrees at render time): an extras-style evaluation render of
-# tifxyz/<name>, kept for comparison; no longer the prize sheet, so no exclusion, flat alias or corpus uses it
-EVAL_PRIZE_OLD = ("fiber_only_20261102b_flatboi_PRIZESHEET",)
-# a later remake of the prize sheet (2026-11-09, same orientation as PRIZESHEET_NEW), an extras-style evaluation render without flat alias
-EVAL_PRIZE_V3 = ("PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi",)
-EVAL_0846A = (*EVAL_MESHES_0846A, *EVAL_QUICK_0846A, *EVAL_PRIZE_OLD, *EVAL_PRIZE_V3)
+# the earlier prize sheets, kept as extras-style evaluation renders of tifxyz/<name> (no exclusion, flat alias or corpus uses them):
+# fiber_only_20261102b_flatboi_PRIZESHEET (2026-11-02, rotated 180 degrees at render time) and PRIZESHEET_NEW (2026-11-06, upright)
+EVAL_PRIZE_OLD = ("fiber_only_20261102b_flatboi_PRIZESHEET", "PRIZESHEET_NEW")
+EVAL_0846A = (*EVAL_MESHES_0846A, *EVAL_QUICK_0846A, *EVAL_PRIZE_OLD)
 
 # (name, segment_prefix, zarr_id)
 SEGMENTS = [
@@ -216,7 +214,7 @@ SEGMENTS = [
     *((name, "", render) for name, (render, _alias, _mesh) in MESHES_0846A.items()),
     *((name, "", render) for name, (render, _mesh) in EVAL_MESHES_0846A.items()),
     *((name, "", name) for name in EVAL_QUICK_0846A),
-    *((name, "", name) for name in (*EVAL_PRIZE_OLD, *EVAL_PRIZE_V3)),
+    *((name, "", name) for name in EVAL_PRIZE_OLD),
 ]
 
 # per-fragment behaviour overrides. skip_labels=True skips the dilated label check
@@ -1713,7 +1711,7 @@ def _assemble_0846a(name, zid, workers, chunk_depth, chunk_y, chunk_x, force=Fal
 
 
 def _eval_mask_dir(name):
-    return os.path.join("masks", "extras") if name in (*EVAL_QUICK_0846A, *EVAL_PRIZE_OLD, *EVAL_PRIZE_V3) else "masks"
+    return os.path.join("masks", "extras") if name in (*EVAL_QUICK_0846A, *EVAL_PRIZE_OLD) else "masks"
 
 
 def _assemble_0846a_eval(name, zid, workers, chunk_depth, chunk_y, chunk_x, force=False):
@@ -1724,7 +1722,7 @@ def _assemble_0846a_eval(name, zid, workers, chunk_depth, chunk_y, chunk_x, forc
     if name in EVAL_QUICK_0846A:
         mesh = f"quick_patches_from_D/PHerc0846A/{name}"
         extra = {"mask_dir": test_assembler.EXTRAS_MASK_DIR, "output_dtype": test_assembler.EXTRAS_DTYPE, "drop_cache": True}
-    elif name in (*EVAL_PRIZE_OLD, *EVAL_PRIZE_V3):
+    elif name in EVAL_PRIZE_OLD:
         mesh = name
         extra = {"mask_dir": test_assembler.EXTRAS_MASK_DIR, "output_dtype": test_assembler.EXTRAS_DTYPE}
     else:
@@ -2056,7 +2054,7 @@ def _mesh_0846a(name):
         return EVAL_MESHES_0846A[name][1]
     if name in EVAL_QUICK_0846A:
         return f"quick_patches_from_D/PHerc0846A/{name}"
-    if name in (*EVAL_PRIZE_OLD, *EVAL_PRIZE_V3):
+    if name in EVAL_PRIZE_OLD:
         return name
     return None
 
@@ -2146,7 +2144,7 @@ def main():
                     help="skip the default <id>.matched.zarr degradation of the fine scans (MATCHED_SIGMAS)")
     ap.add_argument("--mix28", action="store_true",
                     help="download and set up exactly the 29 sheets / patches of the default corpus: the 28 registered mix28 patches (14 PHerc0846A "
-                         "sheets + 14 donors) and the fiber_only_20261102b_flatboi_PRIZESHEET prize sheet, with exclusions, anchors and asf cues "
+                         "sheets + 14 donors) and the prize sheet, with exclusions, anchors and asf cues "
                          "(see the docstring); --only adds scrolls on top")
     ap.add_argument("--check", action="store_true", help="with --mix28: report what is missing or stale (read-only) and exit")
     ap.add_argument("--cue-workers", type=int, default=4, help="parallel asf cue builds with --mix28 (default 4)")

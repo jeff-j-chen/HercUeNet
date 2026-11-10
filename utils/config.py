@@ -999,8 +999,8 @@ def apply_best_run(config) -> None:
 # the best-run recipe (192 px field, dual scale, strong nnPU, text-region gate, asf_morph cue as a fourth input head) on the mix28 corpus
 # (utils/mix6.py: 14 trained 0846A sheets at domain weight 2 (incl. the 4 train-only fiber_only_20261029d_flatboi neighbours and the 3
 # sheets added on 2026-11-02) plus PHerc0009B, 1447, 0841, 0172, the 343 first letters, 0139, 1667 and 0500P2 at 1), with the cue
-# replaced by a flat map per domain (20% on 0846A, 0009B and 0172, always elsewhere: utils/mix6.py CUE_DROPOUT_BY_DOMAIN), the v6 ring parameters, seed 17 and 4 epochs. The fiber_only_20261102b_flatboi_PRIZESHEET
-# prize sheet is rendered, never trained; the 0846A sheets lose their papyrus within 12 voxels of it plus the full context reach
+# replaced by a flat map per domain (20% on 0846A, 0009B and 0172, always elsewhere: utils/mix6.py CUE_DROPOUT_BY_DOMAIN), the v6 ring parameters, seed 17 and 4 epochs. The prize sheet (PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi)
+# is rendered, never trained; the 0846A sheets lose their papyrus within 12 voxels of it plus the full context reach
 # (utils/holdout_exclusion.py). Half-brightness strokes of the 0846A labels (48..207, see utils/dataloader.split_extra_labels) are
 # hard negatives.
 # (The function keeps its mix6 name; mix6 was the 15-patch corpus before mix21 / mix25 / mix26.)

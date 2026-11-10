@@ -1,4 +1,4 @@
-"""Fine-tune v8-in on the mix28 corpus (utils/mix6.py) for 4 epochs ($V8IN_EPOCHS overrides), from the released checkpoint.
+"""Fine-tune v8-in on the mix28 corpus (utils/mix6.py) for a 4-epoch schedule ($V8IN_EPOCHS overrides; utils/queue_ps3.sh stops it after epoch 2), from the released checkpoint.
 (mix28 = the corpus of all three trainings: the 14 PHerc0846A sheets + the labelled donor patches of PHerc0009B, 0343, 1447, 0841,
 0172, 0139, 1667, 0500P2 and PHerc0306B; a donor still without ink or train mask is skipped.
 --corpus mix26 | mix25 | mix22 | mix18 | 0846a trains another corpus on the same staged data; --epochs and
@@ -22,13 +22,13 @@ stage  writes what v8-in reads, per segment, under nader-fork/runs/v8in_mix25_da
        fiber_only_20261029d_flatboi prize sheet (holdout_exclusion_v8in/, utils/holdout_exclusion.py): no supervision there, and
        those pixels of the staged layers are zeroed (like the area outside the sheet). stage and train refuse to run until the
        masks were computed against the current prize sheet.
-train  the PH1447 recipe of nader-fork (finetune_v8in_with_local_segment.py) on the staged corpus: 4 epochs, micro-batch 2 x accumulation 16 (= batch 4 x 8), NEG_WEIGHT 25,
+train  the PH1447 recipe of nader-fork (finetune_v8in_with_local_segment.py) on the staged corpus: 4 epochs (cosine schedule), micro-batch 2 x accumulation 16 (= batch 4 x 8), NEG_WEIGHT 25,
        group-balanced sampling (0846A split into two groups, so it weighs 2 against 1 for every other scroll). The last epoch
        also scores the stitched validation sheets. The final checkpoint is exported to a model folder.
 
-output: nader-fork/runs/v8in_mix28_4ep/model/ (model.safetensors + config.json, printed at the end; ensemble_eval.ipynb and
+output: nader-fork/runs/v8in_mix28_4ep_ps3/model/ (model.safetensors + config.json, exported by a run that is not stopped early, printed at the end; ensemble_eval.ipynb and
 0846A_eval.ipynb read it through utils/mix6.MODEL_PATHS); the Lightning checkpoints
-(a trained-epoch<N>.ckpt after every epoch) are nader-fork/runs/v8in_mix28_4ep/runs/*/checkpoints/.
+(a trained-epoch<N>.ckpt after every epoch) are nader-fork/runs/v8in_mix28_4ep_ps3/runs/*/checkpoints/.
 Needs the corpus data (python3 assemble_training_segments.py --mix28), git, git-lfs, uv and a GPU.
 """
 from __future__ import annotations
@@ -350,7 +350,7 @@ def main() -> None:
     parser.add_argument("--resume", default=None, help="train: continue from this Lightning .ckpt (epoch, optimizer, scheduler)")
     parser.add_argument("--corpus", default=CORPUS, choices=mix6.CORPORA, help="segments to train on (staged data is shared)")
     parser.add_argument("--epochs", type=int, default=EPOCHS, help="epochs (a trained-epoch<N>.ckpt is saved after each)")
-    parser.add_argument("--run-name", default=None, help="folder under nader-fork/runs (default: v8in_mix28_4ep for the default corpus and epochs, else v8in_<corpus>_<epochs>ep)")
+    parser.add_argument("--run-name", default=None, help="folder under nader-fork/runs (default: v8in_mix28_4ep_ps3 for the default corpus and epochs, else v8in_<corpus>_<epochs>ep)")
     parser.add_argument("--dry-run", action="store_true", help="train: write the config and print what would train, then stop")
     args = parser.parse_args()
     CORPUS, EPOCHS = args.corpus, args.epochs

@@ -8,23 +8,24 @@ Three models read the same PHerc0846A surface volumes and are ensembled on one p
 
 Experiment history, the legacy corpora and fragments, label conventions, data layout and normalization are kept in `old/KNOWLEDGE.md`.
 
-## Current setup (2026-11-04)
+## Current setup (2026-11-09)
 
 Every script defaults to this; nothing needs a flag. **All three models train on the same corpus, mix28** (`utils/mix6.py`).
 
 | model | script | corpus | length | output (the notebooks read the last epoch / step) |
 |---|---|---|---|---|
-| cue_dropout | `python3 train.py` | **mix28**: 12 PHerc0846A sheets + the labelled donor patches (straightened2 abf in / out_1 are dropped from this model only, see below) | 4 epochs | `models/runs/cue_dropout_labelsv6_mix28/final.pth` (last epoch); also `epoch_1.pth`, `epoch_2.pth`, `epoch_3.pth`, `epoch_4.pth`; `VESUVIUS_CUE_EPOCH=<n>` points the notebooks and eval queue at one of them |
-| reader-v3 fine-tune | `python3 finetune_readerv3.py` | **mix28**: the 14 sheets + the labelled donor patches | 4000 steps, batch 13, a checkpoint every 1000 | `reader-v3/runs/mix28/ckpt_004000.pth` (`ckpt_001000.pth` ... `ckpt_003000.pth` too) |
-| v8-in fine-tune | `python3 finetune_v8in.py` | **mix28** | 4 epochs, cosine decay over the same 4, a checkpoint every epoch | `nader-fork/runs/v8in_mix28_4ep/model/` (the last epoch; every epoch's `trained-epoch<N>.ckpt` is under `runs/*/checkpoints/`) |
+| cue_dropout | `python3 train.py` | **mix28**: 12 PHerc0846A sheets + the labelled donor patches (straightened2 abf in / out_1 are dropped from this model only, see below) | 4 epochs | `models/runs/cue_dropout_labelsv6_mix28_ps3/final.pth` (last epoch); also `epoch_1.pth`, `epoch_2.pth`, `epoch_3.pth`, `epoch_4.pth`; `VESUVIUS_CUE_EPOCH=<n>` points the notebooks and eval queue at one of them |
+| reader-v3 fine-tune | `python3 finetune_readerv3.py` | **mix28**: the 14 sheets + the labelled donor patches | 4000-step cosine schedule, batch 13, a checkpoint every 1000; `utils/queue_ps3.sh` stops it after step 2000 | `reader-v3/runs/mix28_ps3/ckpt_002000.pth` (`ckpt_001000.pth` too) |
+| v8-in fine-tune | `python3 finetune_v8in.py` | **mix28** | 4 epochs, cosine decay over the 4, a checkpoint every epoch; `utils/queue_ps3.sh` stops it after epoch 2 | `nader-fork/runs/v8in_mix28_4ep_ps3/runs/*/checkpoints/trained-epoch<N>.ckpt` (epoch N+1); `model/` (last epoch) only exists for a run that is not stopped |
 
 mix28 = mix26 (25 trained patches) + three fragments registered 2026-11-04: the PHerc0009B patches `p9b_642` and `p9b_639` and the PHerc0306B
 first-letters sheet `p306b_letters` (see [new fragments](#new-fragments)). That is 28 registered patches and the prize sheet, 29 sheets in all. cue_dropout drops two of the 14 sheets, so it trains on 26 patches; reader-v3 and v8-in train on all 28.
 The interim models trained before this change (cue_dropout mix26 epoch 2, reader-v3 and v8-in on the 18-patch mix18 corpus) stay on disk; `--corpus mix26 | mix25 |
 mix22 | mix18 | 0846a` on the two fine-tune scripts selects the older corpora, and `MIX26_MODEL_PATHS` in `utils/mix6.py` names the interim models
-(the evaluation notebooks default to them until the mix28 trainings have run; `ENSEMBLE_CUE` / `ENSEMBLE_READER` / `ENSEMBLE_V8IN` select others).
-**The prize sheet is `fiber_only_20261102b_flatboi_PRIZESHEET`** (alias `20261102120000`,
-rendered rotated 180 degrees). It is the only prize sheet: every earlier one is superseded and no longer assembled. Nothing trains or validates on it.
+(`ENSEMBLE_CUE` / `ENSEMBLE_READER` / `ENSEMBLE_V8IN` select any checkpoint in the evaluation notebooks, which default to the mix28 `_ps3` runs once those have been trained).
+**The prize sheet is `PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi`** (alias `20261109120000`,
+the 2026-11-09 remake of `PRIZESHEET_NEW`, rendered upright). It is the only prize sheet: every earlier one (`fiber_only_20261102b_flatboi_PRIZESHEET` of 2026-11-02 and `PRIZESHEET_NEW` of 2026-11-06) is superseded and kept only as an evaluation render. Nothing trains or validates on it.
+Runs are tagged by the prize sheet they were made against (`RUN_TAG` in `utils/mix6.py`, which also fixes the output folders above): `_ps3` = this sheet, `_ps2` = `PRIZESHEET_NEW`, no tag = the 2026-11-02 sheet. The earlier runs stay on disk; their exclusion zones differ, so only `_ps3` runs are clean on this prize sheet.
 The three models are ensembled on it by `ensemble_eval.ipynb` (z-score and product composites, see [Evaluation notebooks](#evaluation-notebooks)).
 
 ## Quick start
@@ -34,24 +35,24 @@ their own environments (`reader-v3/.venv`, `nader-fork/.venv`) on first run. Run
 
 ```bash
 # everything the three trainings read, in one command. --mix28 sets up exactly the 29 sheets / patches of mix28 (the 28 registered patches plus the prize sheet): it renders the 14
-# PHerc0846A sheets and the prize sheet (rotated 180 degrees), fetches the 14 donors (the PHerc0306B sheet from Hugging Face), and builds masks, norms, surface detections (PHerc1447: flat;
+# PHerc0846A sheets and the prize sheet (their meshes come from the passphrase-protected archive: it prompts, see below), fetches the 14 donors (the PHerc0306B sheet from Hugging Face), and builds masks, norms, surface detections (PHerc1447: flat;
 # PHerc0846A: flat depth-13 aliases), the w013 .matched volume, surface anchors, the prize-sheet exclusions and 3 depths of asf cues.
 # --check only reports what is missing; python3 -m utils.mix6 prints the same state read-only.
 python3 assemble_training_segments.py --mix28
 
 # the three models, defaults only (each prints where its model is)
-python3 finetune_readerv3.py                          # reader-v3, mix28, 4000 steps
-python3 finetune_v8in.py                              # v8-in, mix28, 4 epochs (cosine over 4)
+python3 finetune_readerv3.py                          # reader-v3, mix28, 4000-step schedule (the queue stops it at step 2000)
+python3 finetune_v8in.py                              # v8-in, mix28, 4-epoch schedule (the queue stops it after epoch 2)
 python3 train.py --dry-run && python3 train.py        # cue_dropout, mix28, 4 epochs
 tensorboard --logdir ./runs --bind-all
 
-# or all of it in two sequential queues, logs in logs_mix28/
-tmux new -d -s mix28 'bash /vesuvius/utils/queue_mix28.sh'            # reader-v3 -> v8-in -> corpus check -> cue_dropout
-tmux new -d -s mix28_eval 'bash /vesuvius/utils/queue_mix28_eval.sh'  # waits for the first, then ensemble_eval + 0846A_eval (reader-v3)
+# or all of it in one sequential queue (logs in logs_ps3/): corpus check -> cue_dropout -> reader-v3 -> v8-in -> three ensembles -> training-fragment figures
+tmux new -d -s queue_ps3 'bash /vesuvius/utils/queue_ps3.sh'          # waits for a running `python3 -m utils.mix6 --build` (tmux session prep_ps3)
 ```
 
-- `utils/queue_mix28.sh` runs the three trainings strictly one after another; a failed training does not stop the next one, and cue_dropout only starts when the corpus check (`python3 -m utils.mix6`) passes.
-- `utils/queue_mix28_eval.sh` waits for that session to end, aborts if a checkpoint is missing, runs `ensemble_eval.ipynb` on the prize sheet (3x2 and 2x2 figures), then `0846A_eval.ipynb` with the last reader-v3 checkpoint on the prize sheet, the 14 trained sheets, the donors and the held-out patches (not the remaining quick patches). Both use `python3 utils/run_notebook.py` (the executed copy goes to `output/notebook_runs/`).
+- **The PHerc0846A meshes are encrypted.** The tifxyz meshes of every PHerc0846A sheet (the 14 trained sheets, the prize sheet and the evaluation renders) are not in git: they ship as `utils/tifxyz_0846A.tar.enc` (openssl aes-256-cbc, pbkdf2 with 600000 iterations, over a tar of `tifxyz/<dir>` paths). When a sheet's render is missing and its mesh is not in `tifxyz/`, `assemble_training_segments.py` asks for the passphrase (up to 3 prompts, or `TIFXYZ_PASSPHRASE` in the environment) and extracts the archive; an empty or wrong answer skips the 0846A sheets, everything else is assembled, and `--mix28` then stops before finalizing the corpus (exclusions, anchors, cues), so rerun it with the passphrase. `python3 -m utils.unlock_tifxyz_0846A [--dest DIR]` extracts the archive by hand. The prize-sheet mesh `tifxyz/PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi/` has to be in the archive, so whoever holds the passphrase rebuilds it when the prize sheet changes.
+- `utils/queue_ps3.sh` runs the three trainings strictly one after another (cue_dropout 4 epochs; reader-v3 and v8-in keep the learning-rate schedule of a 4000-step / 4-epoch run and are stopped after step 2000 / epoch 2); a failed training does not stop the next one, and cue_dropout only starts when the corpus check (`python3 -m utils.mix6`) passes. It then runs `ensemble_eval.ipynb` on the prize sheet three times (3x2 and 2x2 figure each): cue epoch 2 / reader step 1000 / v8-in epoch 1 (`mix28_ps3_c2_r1000_v1`), cue epoch 4 / step 2000 / v8-in epoch 2 (`mix28_ps3_c4_r2000_v2`) and cue epoch 4 / step 2000 / v8-in epoch 1 (`mix28_ps3_c4_r2000_v1`). Last, the third ensemble runs on every training sheet (`ENSEMBLE_SHEET=train0846a`) and `utils/label_overlay_figures.py` writes `output/label_figures/<sheet>.png` (top: z-score composite | v8-in epoch 1; bottom: the same with the red inklabel overlay).
+- `utils/queue_mix28_eval.sh` (the earlier untagged mix28 runs) waits for `queue_mix28.sh`'s session to end, aborts if a checkpoint is missing, runs `ensemble_eval.ipynb` on the prize sheet (3x2 and 2x2 figures), then `0846A_eval.ipynb` with the last reader-v3 checkpoint on the prize sheet, the 14 trained sheets, the donors and the held-out patches (not the remaining quick patches). Both use `python3 utils/run_notebook.py` (the executed copy goes to `output/notebook_runs/`).
 - Every training refuses to start without current prize-sheet exclusions.
 - The fine-tunes stage their data once (`reader-v3/data/mix25`, `nader-fork/runs/v8in_mix25_data`; the folder names are historical and shared by every corpus).
 - Checkpoints go to `models/runs/<run>/` and TensorBoard logs to `runs/<run>/`. An existing cue_dropout run is never overwritten (`_2`, `_3`, ...). Experiment runners call `train.main(configure)` to edit the plain `Config()` instead.
@@ -91,10 +92,10 @@ tmux new -d -s mix28_eval 'bash /vesuvius/utils/queue_mix28_eval.sh'  # waits fo
 | `20250919130642` | same | patch 642 (`p9b_642`, a fractured sheet: many holes in its papyrus mask) | PHerc0009B | mix28 |
 | `20250510172639` | same | patch 639 (`p9b_639`) | PHerc0009B | mix28 |
 | `20261104000001` | same | first-letters sheet (`p306b_letters`, the 41-layer claim-surface render of Prodigle/pherc0306b-first-letters) | PHerc0306B | mix28 |
-| `20261102120000` | `fiber_only_20261102b_flatboi_PRIZESHEET` | **the prize sheet** | PHerc0846A | **held out, never trained or validated on** |
+| `20261109120000` | `PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi` | **the prize sheet** (2026-11-09 remake of `PRIZESHEET_NEW`) | PHerc0846A | **held out, never trained or validated on** |
 
 - **PHerc0846A sheets** are rendered from their tifxyz meshes (`MESHES_0846A` in `assemble_training_segments.py`) and read through a **flat depth-13 alias**: `<alias>.zarr` and the mask / label / train-mask PNGs are symlinks to the render, and `surface_labels/<alias>/` is a constant depth 13 over the mask (no detected surface). With `surface_window_offset = -1` cue_dropout reads slices 9-16. Aliases get their own norm and surface-anchor entries. Hand-drawn labels are in `dilated_inklabels/`, named after the alias; all 14 sheets are train only (no validation split).
-- The fibre sheets (the prize sheet, the four `fiber_only_20261029d` sheets, abf2 and its +28 offset) render like extras: a uint8 zarr named after the mesh, the mask in `masks/extras/` linked into `masks/`. The prize sheet and the four neighbours are rotated 180° (`ROTATE_180`, zarr attribute `rotated_180`) so every stored array is upright; the prize sheet has no label.
+- The fibre sheets (the prize sheet, the four `fiber_only_20261029d` sheets, abf2 and its +28 offset) render like extras: a uint8 zarr named after the mesh, the mask in `masks/extras/` linked into `masks/`. The four `fiber_only_20261029d` neighbours are rotated 180° (`ROTATE_180`, zarr attribute `rotated_180`) so every stored array is upright; the prize sheet's mesh grid is already upright, and it has no label.
 - The other scrolls use their stored surface labels with window offset 0. w013 is a fine scan, so every model reads its spectrally matched sibling `ves_zarrs2/20240304141531.matched.zarr` (with its own norm, anchors and cues). Donors train on their `train_masks/` region only.
 - For every PHerc0846A sheet the hard negatives are drawn on the inklabels at half brightness. `split_extra_labels` takes any solid stroke of 48..207 for one (127 +- 80), so a brush that drifted from 127 still counts; 208 and above is ink.
 - The study behind the corpus choice (single-patch transfer to 0846A) is `runs_corr/report/summary.md`.
@@ -134,9 +135,9 @@ Each folder has a `summary.json` naming the prize sheet, the radius and the cont
 - starts from `models/init_mae192_cue4_seed17.pth`, the 192 px campaign-40 MAE grown to four input heads (`utils/cue_expand.py`); `train.py` builds it when it is missing
 - the prize sheet is rendered in the end-of-training figures and scored over its whole patch; it is never trained or validated on
 
-**reader-v3** (`finetune_readerv3.py`, `setup` -> `prep` -> `train`): `setup` clones `DomRusso2/reader-v3` and the koine_machines training code (ScrollPrize/villa, sparse) into `reader-v3/` and `villa-ink/` at pinned commits, builds `reader-v3/.venv` with uv from `requirements_readerv3.txt` and downloads `reader-v3/reader-v3.pth`. `prep` stages a 21-layer crop around each scroll's surface layer (the trainer jitters a 17-layer window by +-2), the ink label and a supervision mask. Training: sgd, lr 0.003 with 200 warmup steps, 384 px tiles, fp16, a checkpoint every 1000 steps (`ckpt_001000.pth` ... `ckpt_004000.pth`). uv's cache goes to `_ves_tmp/uv_cache` (set `UV_CACHE_DIR` to change it).
+**reader-v3** (`finetune_readerv3.py`, `setup` -> `prep` -> `train`): `setup` clones `DomRusso2/reader-v3` and the koine_machines training code (ScrollPrize/villa, sparse) into `reader-v3/` and `villa-ink/` at pinned commits, builds `reader-v3/.venv` with uv from `requirements_readerv3.txt` and downloads `reader-v3/reader-v3.pth`. `prep` stages a 21-layer crop around each scroll's surface layer (the trainer jitters a 17-layer window by +-2), the ink label and a supervision mask. Training: sgd, lr 0.003 with 200 warmup steps, 384 px tiles, fp16, a checkpoint every 1000 steps (`ckpt_001000.pth`, `ckpt_002000.pth`). uv's cache goes to `_ves_tmp/uv_cache` (set `UV_CACHE_DIR` to change it).
 
-**v8-in** (`finetune_v8in.py`, `setup` -> `stage` -> `train` -> `export`): `setup` clones `jeff-j-chen/nader-fork` (git lfs pulls the weights) and builds `nader-fork/.venv` from `requirements_v8in.txt`. `stage` writes the central 24 layers as tiffs plus label and mask PNGs. Training: the PH1447 recipe of nader-fork with a cosine schedule over the 4 epochs, micro-batch 2 x accumulation 16 (effective batch 32), `NEG_WEIGHT` 25. A `trained-epoch<N>.ckpt` is saved after every epoch; the last one is exported to `nader-fork/runs/v8in_mix28_4ep/model/`. `V8IN_EPOCHS` overrides the epoch count.
+**v8-in** (`finetune_v8in.py`, `setup` -> `stage` -> `train` -> `export`): `setup` clones `jeff-j-chen/nader-fork` (git lfs pulls the weights) and builds `nader-fork/.venv` from `requirements_v8in.txt`. `stage` writes the central 24 layers as tiffs plus label and mask PNGs. Training: the PH1447 recipe of nader-fork with a cosine schedule over the 4 epochs, micro-batch 2 x accumulation 16 (effective batch 32), `NEG_WEIGHT` 25. A `trained-epoch<N>.ckpt` is saved after every epoch; the last one of a run that is not stopped early is exported to `nader-fork/runs/v8in_mix28_4ep_ps3/model/`. `V8IN_EPOCHS` overrides the epoch count.
 
 **Labels differ per model.** cue_dropout: half-brightness strokes of `dilated_inklabels` are hard negatives in 0846A and unused letters elsewhere; ring negatives and nnPU far background surround the ink. reader-v3 and v8-in: half-brightness strokes are not ink and stay supervised background in 0846A; every other scroll trains on its `train_masks` region only (255 trains, 119 = hard negative inside the papyrus mask, black = unused, half-brightness strokes unused).
 
@@ -144,12 +145,12 @@ Each folder has a `summary.json` naming the prize sheet, the radius and the cont
 
 | Notebook | Role |
 |---|---|
-| `ensemble_eval.ipynb` | Ensembles three models on the prize sheet (default: the interim mix26 cue_dropout epoch 2 and mix18 reader-v3 / v8-in; `ENSEMBLE_CUE` / `ENSEMBLE_READER` / `ENSEMBLE_V8IN` select the mix28 outputs). Saves a 3x2 grid (released reader-v3 for comparison / reader-v3 fine-tune / cue_dropout / v8-in / z-score composite / product composite) plus both composites as plain PNGs, then a simple 2x2 figure `product_ct_2x2.png`: product composite, ct composite view, and two more copies of the ct composite view. Output goes to `output/ensemble/mix26/<sheet>/` |
+| `ensemble_eval.ipynb` | Ensembles three models on the prize sheet (default: the mix28 `_ps3` runs, cue_dropout epoch 4, reader-v3 step 2000 and v8-in epoch 1; `ENSEMBLE_CUE` / `ENSEMBLE_READER` / `ENSEMBLE_V8IN` select other checkpoints, `ENSEMBLE_SHEET` another sheet such as an earlier prize sheet). Saves a 3x2 grid (released reader-v3 for comparison / reader-v3 fine-tune / cue_dropout / v8-in / z-score composite / product composite) plus both composites as plain PNGs, then a simple 2x2 figure `product_ct_2x2.png`: product composite, ct composite view, and two more copies of the ct composite view. Output goes to `output/ensemble/<ENSEMBLE_SUBDIR>/<sheet>/` (default `mix28_h4_r2000_v1_ps3`) |
 | `0846A_eval.ipynb` | Runs one of the three models (the kind is detected from `CHECKPOINT`, default the mix18 reader-v3 fine-tune) on the prize sheet, the 14 trained sheets, the donor patches, the held-out patches and the remaining PHerc0846A quick patches |
 | `eval_scrolls.ipynb` | Runs a cue_dropout checkpoint on every labeled training fragment; useful for relabeling and sanity checks |
 | `eval_test.ipynb` | Runs a cue_dropout checkpoint on the 13 test surfaces (see [Test surfaces](#test-surfaces)) |
 
-**Ensemble.** Each model predicts the sheet at its own resolution (reader-v3 and v8-in per pixel, cue_dropout per 16 px cell). Every map is stretched to its own p1-p99.5 over the sheet mask. The z-score composite is the mean of the per-model z-scores; the product composite multiplies the three stretched maps, so it is high only where all three agree. Predictions are cached under `output/ensemble/mix26/<sheet>/cache/` (delete a file to recompute that model). The ct composite view is the masked max projection of the 17 central layers reader-v3 reads.
+**Ensemble.** Each model predicts the sheet at its own resolution (reader-v3 and v8-in per pixel, cue_dropout per 16 px cell). Every map is stretched to its own p1-p99.5 over the sheet mask. The z-score composite is the mean of the per-model z-scores; the product composite multiplies the three stretched maps, so it is high only where all three agree. Predictions are cached under `output/ensemble/<ENSEMBLE_SUBDIR>/<sheet>/cache/` (delete a file to recompute that model). The ct composite view is the masked max projection of the 17 central layers reader-v3 reads.
 
 **0846A notebook.** Settings cell: `CHECKPOINT` (any of the three; `VESUVIUS_CHECKPOINT` overrides it), the depth-ensemble options and `DEPTH_OFFSET = -1` (cue_dropout only: slices 9-16 of the flat depth-13 surface). cue_dropout replays its run config including its input heads (restart a long-lived kernel if the 4-head check fails); reader-v3 reads the 17 central layers and v8-in the 24 central layers, both per pixel in their own virtualenvs (`utils/predict_models.py`). Cells, in order: the prize sheet, the 11 older trained sheets (one loop cell), the three sheets added in mix26 (abf2, abf2 +28, test surface 6; one cell each), the donor patches (one loop cell), the held-out patches (straightened2 out_4 / out_5, three quick patches), and the remaining quick patches into a `quick_patches/` subfolder. Trained patches get a 2x2 figure (prediction, composite, prediction with the inklabel coloured by which models trained on it, asf_morph cue); the others get prediction | composite. Figures go to `output/0846A/<model>/`. The inklabel colours: red = used by all three, orange = dropped by cue_dropout only, yellow = dropped by cue_dropout and v8-in, dark yellow = dropped by all three.
 
@@ -167,13 +168,14 @@ Only these files live in the base directory: `README.md`, `train.py`, `finetune_
 |---|---|
 | `utils/mix6.py` | The corpora (mix28 and the frozen older ones), the prize sheet, the model locations (`MODEL_PATHS`), data checks (`python3 -m utils.mix6 [--build]`), flat PHerc1447 surfaces and the 3-depth asf cues |
 | `utils/holdout_exclusion.py` | The prize-sheet exclusion masks of the trained 0846A sheets and their readiness check |
+| `utils/unlock_tifxyz_0846A.py`, `utils/tifxyz_0846A.tar.enc` | The passphrase-protected archive of the PHerc0846A meshes and its extractor |
 | `utils/config.py` | Shared configuration; `apply_mix6_run` is what `train.py` trains |
 | `utils/model.py`, `dataloader.py`, `training_utils.py`, `visualizer.py`, `surface.py` | The 3D nnU-Net, labels / rings / splits / sampling, optimizers and losses, TensorBoard figures, surface-relative depth targets |
 | `utils/norm.py`, `utils/norm_cache.json`, `utils/surface_anchor_cache.json` | Chunk-aligned masked normalization and surface-anchor normalization, with their per-fragment caches |
 | `utils/precomputed_asf.py`, `utils/build_domain_cues.py` | The whole-patch asf_morph cue maps in `cue_asf_morph/` (+ `_dm1`, `_dp1`) |
 | `utils/predict_models.py` | Inference of reader-v3 and v8-in in their own environments; detects which of the three models a checkpoint is |
 | `utils/generate_surface_supervision.py`, `utils/precompute_norm.py`, `utils/depth_reversed.json`, `utils/depth_flip.py` | Literal surface maps, norm precompute, the list of depth-reversed renders and the in-place flip |
-| `utils/run_notebook.py`, `utils/queue_mix28.sh`, `utils/queue_mix28_eval.sh`, `utils/AGENT_QUICKSTART.md` | Headless notebook runs, the two queues, short operating notes |
+| `utils/run_notebook.py`, `utils/queue_ps3.sh`, `utils/label_overlay_figures.py`, `utils/AGENT_QUICKSTART.md` | Headless notebook runs, the current queue, the training-sheet label figures, short operating notes |
 | `old/` | Unused scripts, campaign history and finished studies (`old/KNOWLEDGE.md` is the long record) |
 
 | Directory | Contents |
@@ -184,7 +186,7 @@ Only these files live in the base directory: `README.md`, `train.py`, `finetune_
 | `surface_labels/` | Literal surface depth and confidence maps |
 | `cue_asf_morph*/` | Precomputed asf_morph cue maps (git-ignored; rebuilt by `--mix28`) |
 | `holdout_exclusion*/` | Prize-sheet exclusion masks per model |
-| `tifxyz/` | The meshes every patch is rendered from |
+| `tifxyz/` | The meshes every patch is rendered from (the PHerc0846A meshes are not in git: `utils/tifxyz_0846A.tar.enc`) |
 | `models/`, `runs*/`, `reader-v3/`, `nader-fork/` | Checkpoints, TensorBoard logs and the fine-tune workspaces |
 | `output/`, `logs_mix28/`, `_ves_tmp/` | Figures and reviews, queue logs, regenerable scratch data |
 

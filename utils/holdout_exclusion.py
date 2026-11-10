@@ -1,5 +1,5 @@
 """discard the parts of the trained PHerc0846A sheets near the prize sheet (utils/mix6.py HOLDOUT_NAME, now
-fiber_only_20261102b_flatboi_PRIZESHEET; every earlier prize sheet is superseded).
+PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi; every earlier prize sheet is superseded).
 
 the neighbour sheets were traced next to the prize sheet and in places run onto it, so their renders and labels would leak
 it into training. For every trained 0846A sheet this measures, at each mesh point, the 3D distance to the prize-sheet mesh
