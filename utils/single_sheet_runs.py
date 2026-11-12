@@ -1,6 +1,6 @@
-"""leave-all-but-one PHerc0846A runs of cue_dropout (HercUeNet): the mix26 corpus with ONE PHerc0846A sheet kept in, 2 epochs.
+"""leave-all-but-one PHerc0846A runs of HercUeNet: the mix26 corpus with ONE PHerc0846A sheet kept in, 2 epochs.
 
-One run per sheet of the cue_dropout corpus (utils/mix6.py CUE_TRAIN_0846A, the 12 sheets; straightened2 abf in_1 / out_1 are
+One run per sheet of the HercUeNet corpus (utils/mix6.py CUE_TRAIN_0846A, the 12 sheets; straightened2 abf in_1 / out_1 are
 already dropped from it), each trained on that sheet plus the 11 donor patches (the other 11 sheets are removed from the
 training config like the dropped sheets of the k_folds.py leave-patches-out arms). Everything else is `apply_mix6_run`
 (utils/config.py): 192 px field, asf cue head, nnPU, ring labels, seed 17; warm-up epoch, then lr 1e-4. An epoch is what

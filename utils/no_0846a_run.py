@@ -1,4 +1,4 @@
-"""generalization test: cue_dropout (HercUeNet) trained on the mix26 corpus WITHOUT any PHerc0846A sheet (the 11 donor patches only).
+"""generalization test: HercUeNet trained on the mix26 corpus WITHOUT any PHerc0846A sheet (the 11 donor patches only).
 
 Same recipe as the leave-all-but-one runs (utils/single_sheet_runs.py): `apply_mix6_run` with the 0846A domain removed (so no
 equalize_domain, uniform donor weights), 2 epochs of 169,173 draws. Afterwards final.pth renders the prize sheet.

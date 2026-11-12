@@ -1,4 +1,4 @@
-"""Fine-tune reader-v3 on the mix28 corpus (utils/mix6.py) for a 4000-step schedule (utils/queue_ps3.sh stops it after step 2000), from the released checkpoint.
+"""Fine-tune reader-v3 on the mix28 corpus (utils/mix6.py) for a 4000-step schedule (utils/queue_ps4.sh runs it to the end; the ensemble uses the step-1000 checkpoint), from the released checkpoint.
 (mix28 = the corpus of all three trainings: the 14 PHerc0846A sheets + the labelled donor patches of PHerc0009B, 0343, 1447, 0841,
 0172, 0139, 1667, 0500P2 and PHerc0306B; a donor still without ink or train mask is skipped.
 --corpus mix26 | mix25 | mix22 | mix18 | 0846a trains another corpus on the same staged data; --steps and
@@ -26,7 +26,7 @@ prep   stages every corpus segment the way the reader reads a corpus: a 21-layer
 train  batch 13 (0846A 4, each of the other scrolls 1, the slots of a missing scroll go to 0009B; sgd, lr 0.003, 200 warmup steps), 384 px
        tiles, fp16; checkpoints every 1000 steps.
 
-output: reader-v3/runs/mix28_ps3/ckpt_<step>.pth (printed at the end; a checkpoint every 1000 steps; the models used are steps 1000 and 2000). ensemble_eval.ipynb and 0846A_eval.ipynb read it through
+output: reader-v3/runs/mix28_ps4_<seed>/ckpt_<step>.pth (printed at the end; a checkpoint every 1000 steps; the model used is step 1000; <seed> = s1 / s2, VESUVIUS_SEED_TAG or --seed; the BCE term weighs the background by 0.8, see patch_loss). ensemble_eval.ipynb and 0846A_eval.ipynb read it through
 utils/mix6.MODEL_PATHS.
 Needs the corpus data (python3 assemble_training_segments.py --mix28), git, uv and a GPU.
 """
@@ -43,7 +43,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO))
-from utils import holdout_exclusion, mix6  # noqa: E402
+from utils import holdout_exclusion, mix6, prize_finetune  # noqa: E402
+from utils.predict_models import venv_python  # noqa: E402
 
 READER = Path(os.environ.get("READER_V3_DIR", REPO / "reader-v3"))
 VILLA = Path(os.environ.get("VILLA_DIR", REPO / "villa-ink"))
@@ -60,9 +61,15 @@ BATCH_COUNTS = {"0846A": 4, "0343": 1, "0009B": 1, "1447": 1, "0841": 1, "0814":
 BATCH = 13
 STEPS = mix6.READER_STEPS
 LEARNING_RATE, WARMUP_STEPS, SAVE_EVERY = 0.003, 200, 1000
+SEED = mix6.SEED["reader_v3"]  # train + sampling seed (utils/mix6.py SEEDS, VESUVIUS_SEED_TAG)
+NEG_WEIGHT = mix6.READER_NEG_WEIGHT  # weight of the background pixels in the BCE term (1.0 before; see utils/mix6.py)
+LOSS_FILE = VILLA / "ink-detection" / "koine_machines" / "training" / "loss" / "losses.py"
+NNUNET_LOSSES = VILLA / "vesuvius" / "src" / "vesuvius" / "models" / "training" / "loss" / "nnunet_losses.py"
 EXCLUSION = holdout_exclusion.READER_EXCLUSION_DIR
 # set from the command line: which corpus (utils/mix6.py corpus_segments) is trained and where it goes
 CORPUS, RUN_NAME = mix6.FINETUNE_CORPUS, mix6.READER_RUN
+# --init: start from this checkpoint instead of the released reader-v3.pth (the special prize-sheet fine-tune starts from a mix28 step)
+INIT = None
 
 
 # the torch wheels are several GB: keep uv's cache next to the repo (the container's home disk is small)
@@ -85,7 +92,7 @@ def final_checkpoint(smoke: bool) -> Path:
 def batch_counts() -> dict:
     """samples per batch of each scroll of the (labelled part of the) corpus; the batch stays 13."""
     scrolls = list(dict.fromkeys(segment.scroll for segment in mix6.corpus_segments(CORPUS).values()))
-    if CORPUS == "0846a":
+    if CORPUS in ("0846a", "prize"):
         return {"0846A": BATCH}
     counts = {scroll: BATCH_COUNTS[scroll] for scroll in scrolls}
     if CORPUS == "mix18":  # every donor scroll is one patch: 2 slots keep the study's 0846A 2 : donor 1 domain weight
@@ -93,6 +100,43 @@ def batch_counts() -> dict:
     # a scroll missing from the corpus (PHerc0814, or a donor without labels) leaves its slot to 0009B, the strongest donor
     counts["0009B"] += BATCH - sum(counts.values())
     return counts
+
+
+# ---- background weight in the BCE term (a local patch of the pinned vesuvius checkout) --------------------------------------
+
+PATCH_INIT = """    def __init__(self, *args, bce_label_smoothing: float = 0.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not 0.0 <= bce_label_smoothing <= 1.0:"""
+PATCH_INIT_NEW = """    def __init__(self, *args, bce_label_smoothing: float = 0.0, **kwargs):
+        # bce_kwargs["neg_weight"]: weight of the background pixels in the BCE term (default 1.0)
+        bce_kwargs = dict(kwargs.get("bce_kwargs", {}))
+        neg_weight = float(bce_kwargs.pop("neg_weight", 1.0))
+        if "bce_kwargs" in kwargs:
+            kwargs["bce_kwargs"] = bce_kwargs
+        super().__init__(*args, **kwargs)
+        self.neg_weight = neg_weight
+        if not 0.0 <= bce_label_smoothing <= 1.0:"""
+PATCH_FORWARD = """            denom = torch.clip(mask.sum(), min=1e-8)
+            ce_loss = (self.ce(net_output, smoothed_targets) * mask).sum() / denom"""
+PATCH_FORWARD_NEW = """            ce_map = self.ce(net_output, smoothed_targets)
+            if self.neg_weight != 1.0:
+                weight = torch.where(target_regions > 0.5, torch.ones_like(ce_map), torch.full_like(ce_map, self.neg_weight))
+                ce_map = ce_map * weight
+                denom = torch.clip((mask * weight).sum(), min=1e-8)
+            else:
+                denom = torch.clip(mask.sum(), min=1e-8)
+            ce_loss = (ce_map * mask).sum() / denom"""
+
+
+def patch_loss() -> None:
+    """add LabelSmoothedDCAndBCELoss(bce_kwargs={"neg_weight": w}) to the checkout (idempotent; a no-op once patched)."""
+    text = NNUNET_LOSSES.read_text()
+    if "neg_weight" in text:
+        return
+    if text.count(PATCH_INIT) != 1 or text.count(PATCH_FORWARD) != 1:
+        raise SystemExit(f"[patch] {NNUNET_LOSSES} is not the pinned version: cannot add the background weight")
+    NNUNET_LOSSES.write_text(text.replace(PATCH_INIT, PATCH_INIT_NEW).replace(PATCH_FORWARD, PATCH_FORWARD_NEW))
+    print("[patch] background weight added to LabelSmoothedDCAndBCELoss", flush=True)
 
 
 # ---- setup ---------------------------------------------------------------------------------------------------------------
@@ -122,6 +166,7 @@ def setup() -> None:
         run(["uv", "venv", "--python", "3.12", READER / ".venv"], env=UV_ENV)
         run(["uv", "pip", "install", "--python", PYTHON, "-r", REPO / "requirements_readerv3.txt"], env=UV_ENV)
         run(["uv", "pip", "install", "--python", PYTHON, "--no-deps", "-e", VILLA / "vesuvius", "-e", VILLA / "ink-detection"], env=UV_ENV)
+    patch_loss()
     run([PYTHON, "-c", "import koine_machines.training.train"])
 
     if not CHECKPOINT.is_file() or CHECKPOINT.stat().st_size != CHECKPOINT_BYTES:
@@ -140,7 +185,7 @@ def _plane_zarr(path: Path, shape, chunks, dtype):
 
 def _signature(alias: str) -> str:
     """hash of everything a staged segment is made from."""
-    segment = mix6.ALL_SEGMENTS[alias]
+    segment = mix6.segment_of(alias)
     digest = hashlib.sha1(f"{segment.layer}:{DEPTH}:{segment.split_masked}:blank-zone".encode())
     paths = [REPO / "masks" / f"{segment.render}.png", REPO / "dilated_inklabels" / f"{alias}.png"]
     if segment.split_masked:
@@ -185,14 +230,14 @@ def prep() -> None:
             split = cv2.imread(str(REPO / "train_masks" / f"{alias}.png"), cv2.IMREAD_GRAYSCALE)[:rows, :cols]
             mask = mask & ((split >= 240) | ((split >= 100) & (split <= 143))) & ~extra
         discard = holdout_exclusion.load(alias, directory=EXCLUSION)
-        if discard is None and int(alias) in mix6.SHEETS_0846A:
-            raise SystemExit(f"[prep] {alias}: no prize-sheet exclusion in {EXCLUSION} (python3 -m utils.holdout_exclusion)")
+        if discard is None and (int(alias) in mix6.SHEETS_0846A or CORPUS == "prize"):
+            raise SystemExit(f"[prep] {alias}: no exclusion in {EXCLUSION} (python3 -m utils.{'prize_finetune' if CORPUS == 'prize' else 'holdout_exclusion'})")
         if discard is not None:
             discard = discard[:rows, :cols]
             mask &= ~discard
             ink &= ~discard
-            print(f"[prep] {alias}: {int(discard.sum())} px within {holdout_exclusion.READER_RADIUS_VOX:g} vox of the prize sheet "
-                  "discarded and blanked")
+            what = "the half-brightness region of the label" if CORPUS == "prize" else f"{holdout_exclusion.READER_RADIUS_VOX:g} vox of the prize sheet"
+            print(f"[prep] {alias}: {int(discard.sum())} px of {what} discarded and blanked")
         z0 = segment.layer - DEPTH // 2
         if z0 < 0 or z0 + DEPTH > source.shape[0]:
             raise ValueError(f"{alias}: surface layer {segment.layer} leaves the volume")
@@ -245,8 +290,15 @@ def config(smoke: bool) -> Path:
         })
     base["datasets"] = datasets
     base["fixed_scroll_prior"]["target_batch_counts"] = batch_counts()
+    base["seed"] = base["fixed_scroll_prior"]["seed"] = SEED  # both must match (koine_machines.training.train)
+    smoothing = base.get("loss", {})
+    base["loss"] = {"terms": [{  # the trainer's default term (dice 0.25, bce 1.0) plus the background weight
+        "name": "LabelSmoothedDCAndBCELoss", "metric_name": "base", "weight": 1.0, "weight_dice": 0.25, "weight_ce": 1.0,
+        "dice_label_smoothing": float(smoothing.get("dice_label_smoothing", 0.0)),
+        "bce_label_smoothing": float(smoothing.get("bce_label_smoothing", 0.0)),
+        "bce_kwargs": {"neg_weight": NEG_WEIGHT}}]}
     base.update({
-        "checkpoint": str(CHECKPOINT),
+        "checkpoint": str(INIT or CHECKPOINT),
         "weights_only": True,
         "batch_size": sum(batch_counts().values()),
         "grad_acc_steps": 1,
@@ -275,16 +327,18 @@ def train(smoke: bool) -> Path:
             shutil.rmtree(run_dir(smoke))
         elif list(run_dir(smoke).glob("ckpt_*.pth")):
             raise SystemExit(f"[train] {run_dir(smoke)} holds the checkpoints of an interrupted run; delete it to train again")
+    patch_loss()
     path = config(smoke)
     env = dict(os.environ, PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
-    run([PYTHON, "-m", "koine_machines.training.train", path], cwd=READER, env=env)
+    # the local mirror: every spawned loader worker re-imports torch, which took ~85 s each from the network-drive venv
+    run([venv_python(READER / ".venv"), "-m", "koine_machines.training.train", path], cwd=READER, env=env)
     if not final.is_file():
         raise SystemExit(f"[train] finished without {final}")
     return final
 
 
 def main() -> None:
-    global CORPUS, STEPS, RUN_NAME
+    global CORPUS, STEPS, RUN_NAME, INIT, LEARNING_RATE, WARMUP_STEPS, SAVE_EVERY, EXCLUSION, SEED, NEG_WEIGHT
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", default="all", choices=("all", "setup", "prep", "train"))
     parser.add_argument("--smoke", action="store_true", help="20 steps into runs/mix25_smoke")
@@ -292,8 +346,25 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=STEPS, help="optimizer steps (a checkpoint every 1000)")
     parser.add_argument("--run-name", default=None, help="folder under reader-v3/runs (default: mix28 for the default corpus and steps, else <corpus>_<steps>)")
     parser.add_argument("--dry-run", action="store_true", help="train: write the config and print what would train, then stop")
+    parser.add_argument("--init", default=None, help="train from this checkpoint (weights only) instead of the released reader-v3.pth")
+    parser.add_argument("--lr", type=float, default=None, help=f"learning rate (default {LEARNING_RATE})")
+    parser.add_argument("--warmup", type=int, default=None, help=f"warmup steps (default {WARMUP_STEPS})")
+    parser.add_argument("--save-every", type=int, default=None, help=f"checkpoint every N steps (default {SAVE_EVERY})")
+    parser.add_argument("--seed", type=int, default=None, help=f"training / sampling seed (default {SEED}: utils/mix6.py SEEDS[VESUVIUS_SEED_TAG])")
+    parser.add_argument("--neg-weight", type=float, default=None, help=f"background weight of the BCE term (default {NEG_WEIGHT:g})")
     args = parser.parse_args()
+    SEED = args.seed if args.seed is not None else SEED
+    NEG_WEIGHT = args.neg_weight if args.neg_weight is not None else NEG_WEIGHT
     CORPUS, STEPS = args.corpus, args.steps
+    if args.init:
+        INIT = Path(args.init).resolve()
+        if not INIT.is_file():
+            raise SystemExit(f"--init {INIT} does not exist")
+    LEARNING_RATE = args.lr or LEARNING_RATE
+    WARMUP_STEPS = args.warmup if args.warmup is not None else WARMUP_STEPS
+    SAVE_EVERY = args.save_every or SAVE_EVERY
+    if CORPUS == "prize":  # the prize sheet alone: its discard mask is the half-brightness region of its label
+        EXCLUSION = prize_finetune.DIRS["reader_v3"]
     RUN_NAME = args.run_name or (mix6.READER_RUN if (CORPUS, STEPS) == (mix6.FINETUNE_CORPUS, mix6.READER_STEPS) else f"{CORPUS}_{STEPS}")
     os.chdir(REPO)
     final = None
@@ -301,9 +372,11 @@ def main() -> None:
         setup()
     if args.command in ("all", "prep", "train"):
         # NOTHING trains on the prize sheet: the 18-voxel masks must exist for every trained 0846A sheet, computed against it
-        problems = holdout_exclusion.problems("reader_v3")
+        # (the prize corpus is the prize sheet itself: its region mask must match its label instead)
+        problems = prize_finetune.problems("reader_v3") if CORPUS == "prize" else holdout_exclusion.problems("reader_v3")
         if problems:
-            raise SystemExit("prize-sheet exclusion not ready (python3 -m utils.holdout_exclusion):\n  " + "\n  ".join(problems[:10]))
+            raise SystemExit("prize-sheet exclusion not ready (python3 -m utils."
+                             + ("prize_finetune" if CORPUS == "prize" else "holdout_exclusion") + "):\n  " + "\n  ".join(problems[:10]))
     if args.command in ("all", "prep"):
         problems = mix6.status([int(alias) for alias in mix6.corpus_segments(CORPUS)], derived=False)
         if problems:
@@ -320,6 +393,8 @@ def main() -> None:
         final = train(args.smoke)
     if final is not None:
         print(f"\n[done] reader-v3 {CORPUS} fine-tune ({'smoke, 20' if args.smoke else str(STEPS)} steps): {final}", flush=True)
+        if not args.smoke and CORPUS == mix6.FINETUNE_CORPUS:
+            print(mix6.describe_selection(), flush=True)
 
 
 if __name__ == "__main__":

@@ -1,16 +1,16 @@
-"""one-off tests of reader-v3 and cue_dropout on the prize sheet (saved models only, nothing is trained):
+"""one-off tests of reader-v3 and HercUeNet on the prize sheet (saved models only, nothing is trained):
 
-  0 baseline      flat prize sheet, the depths as they are (cue_dropout flat depth 13, offset -1 = slices 9-16; reader-v3 central 17)
+  0 baseline      flat prize sheet, the depths as they are (HercUeNet flat depth 13, offset -1 = slices 9-16; reader-v3 central 17)
   1 surface       the detected surface supervision (utils/generate_surface_supervision.py, output/prize_depth_tests/surface_labels/)
-                  instead of the flat one. cue_dropout reads it the way it reads a donor patch (window = tile surface depth - 3, offset 0);
+                  instead of the flat one. HercUeNet reads it the way it reads a donor patch (window = tile surface depth - 3, offset 0);
                   reader-v3 takes no surface input, so its volume is straightened first: every pixel's column is shifted so the detected
                   surface sits at layer 15 (the layer its donor training crops are centred on)
-  2 reversed      the depths of the window each model reads put in backwards (cue_dropout slices 9-16, reader-v3 slices 6-22)
+  2 reversed      the depths of the window each model reads put in backwards (HercUeNet slices 9-16, reader-v3 slices 6-22)
   3 shuffled      the same windows in a random order (a different permutation per model)
 
-cue_dropout's asf cue map is computed from the window it reads in every test (the stored one for the baseline, which is checked).
+HercUeNet's asf cue map is computed from the window it reads in every test (the stored one for the baseline, which is checked).
 Every map is shown with the baseline's own p1-p99.5 limits, so a model that goes quiet looks quiet. Figures (2x2: reader-v3 |
-cue_dropout / product | ct composite of the layers fed to the reader) and maps: output/prize_depth_tests/.
+HercUeNet / product | ct composite of the layers fed to the reader) and maps: output/prize_depth_tests/.
 """
 from __future__ import annotations
 

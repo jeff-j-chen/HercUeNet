@@ -1975,11 +1975,11 @@ The README now covers only the PHerc0846A submission and the current three-model
 **Changes from mix25 to mix26 / mix18 (2026-11-02).** The prize sheet is now `fiber_only_20261102b_flatboi_PRIZESHEET` (the only one assembled; the
 assembler's `--mix26` flag sets up exactly the 26 sheets / patches of mix26 + the prize sheet); the exclusions were recomputed against it (12 / 18 / 25 voxels).
 mix26 drops the 0139 title and the two PHerc0814 patches and adds three train-only sheets (abf2, abf2 +28, test surface 6). The fine-tunes train on the
-smaller mix18 corpus. cue_dropout trains 5 epochs, reader-v3 3000 steps (batch 12), v8-in 3 epochs (cosine over 3).
+smaller mix18 corpus. HercUeNet trains 5 epochs, reader-v3 3000 steps (batch 12), v8-in 3 epochs (cosine over 3).
 
 **Changes from mix21 (2026-10-30).** Added the four fibre neighbours of the new prize sheet as train-only 0846A sheets; the prize sheet moved from
-straightened2 to fiber_only_20261029d_flatboi; the exclusions were recomputed against it (12 / 18 / 25 voxels, the cue_dropout one over the full
-context); cue_dropout trains 6 epochs and reader-v3 3000 steps; the notebooks read the last epoch / step of every training. mix21 never trained.
+straightened2 to fiber_only_20261029d_flatboi; the exclusions were recomputed against it (12 / 18 / 25 voxels, the HercUeNet one over the full
+context); HercUeNet trains 6 epochs and reader-v3 3000 steps; the notebooks read the last epoch / step of every training. mix21 never trained.
 
 **Changes from mix6 to mix21 (2026-10-29).** Dropped PHerc1447 w058 (`20260930144758`) and PHerc0172 w068 (`20251111010954`). Added w041, w013 and the six
 2026-10-28 additions except 343P -4_b2: 500P2 -1/-2, 0009B 592, 0841 w00, 0814 459 and the 0139 title. The six additions now have hand-drawn labels in
@@ -2120,8 +2120,8 @@ previews to `runs_kfolds/splits/`. `--only cv_fold_1,...` selects arms; `--dry-r
 
 `0846A_eval.ipynb` runs one of the three mix25 models on the prize sheet, the mix25 scrolls, the held-out sheets and the PHerc0846A quick patches (`assemble_test_segments.py --include-extras`):
 
-- settings cell: `CHECKPOINT` (any of the three, default the reader-v3 fine-tune at step 3000; the kind is detected from the file by `utils/predict_models.detect_kind`), the depth-ensemble options and `DEPTH_OFFSET = -1` (cue_dropout only: slices 9-16 of the flat depth-13 surface). For cue_dropout the run config is replayed, including its input heads; a long-lived kernel must be restarted if the 4-head check fails
-- each model reads a scroll its native way: cue_dropout reads 8 slices and predicts one value per 16 px cell, reader-v3 reads the 17 central layers and v8-in the 24 central layers, both predicting per pixel. The two per-pixel models run in their own virtualenvs (`utils/predict_models.py`)
+- settings cell: `CHECKPOINT` (any of the three, default the reader-v3 fine-tune at step 3000; the kind is detected from the file by `utils/predict_models.detect_kind`), the depth-ensemble options and `DEPTH_OFFSET = -1` (HercUeNet only: slices 9-16 of the flat depth-13 surface). For HercUeNet the run config is replayed, including its input heads; a long-lived kernel must be restarted if the 4-head check fails
+- each model reads a scroll its native way: HercUeNet reads 8 slices and predicts one value per 16 px cell, reader-v3 reads the 17 central layers and v8-in the 24 central layers, both predicting per pixel. The two per-pixel models run in their own virtualenvs (`utils/predict_models.py`)
 - cells, in order: the prize sheet (held out), the eleven trained 0846A sheets (one loop cell), the fourteen other trained patches (stored surface labels, window offset 0; one loop cell, the lists come from `utils/mix6.py`), then the held-out out_4, out_5, three quick patches and straightened2. Trained patches get a 2×2 figure (prediction, composite, prediction with the inklabel coloured by which models trained on it, asf_morph cue); all others get prediction | composite. Figures go to `output/0846A/<model>/`
 - the last cell renders the remaining quick patches into one `quick_patches/` subfolder (the queue skips it)
 

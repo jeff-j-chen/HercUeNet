@@ -1,4 +1,4 @@
-"""HercUeNet (cue_dropout) trained WITHOUT any PHerc0846A sheet, then fine-tunes of the saved model, then a prize-sheet grid.
+"""HercUeNet trained WITHOUT any PHerc0846A sheet, then fine-tunes of the saved model, then a prize-sheet grid.
 
   base      4 epochs on mix28 minus the 0846A domain (the 9 donor scrolls, 14 patches); each epoch keeps the donor draws of a mix28 epoch
             (298,071 = 364,309 - 66,238), so a donor sees what it saw in the mix28 run        -> models/runs/hercuenet_no0846a/
@@ -19,7 +19,7 @@ Everything else is `apply_mix6_run` (utils/config.py): 192 px field, asf cue hea
 warm-up (a learning-rate ramp over 1-2 epochs would never reach lr). The prize sheet is never trained or validated on.
 
 grid  output/hercuenet_ft/prize_sheet_1x3.png: ft_0846a_9b_neg epoch 3 | ft_sharp epoch 3 | ft_sharp_replay epoch 2 (real depth-0 asf cue, flat depth-13 surface,
-      window offset -1, as ensemble_eval.ipynb runs cue_dropout). Earlier figures: prize_sheet_2x2.png, _3x2.png, _1x2.png.
+      window offset -1, as ensemble_eval.ipynb runs HercUeNet). Earlier figures: prize_sheet_2x2.png, _3x2.png, _1x2.png.
 
   python3 -m utils.hercuenet_ft queue [--dry-run]     # every stage that is not done, then the grid; logs in logs_hercuenet_ft/
   python3 -m utils.hercuenet_ft train base|ft_mix28|ft_0846a|ft_0846a_ext|ft_0846a_9b|ft_0846a_9b_neg|ft_sharp|ft_sharp_replay [--dry-run] [--smoke] [--init CKPT]
@@ -52,7 +52,7 @@ STAGES = {
     "ft_0846a_9b": {"run": "hercuenet_no0846a_ft_0846a_9b_3ep", "epochs": 3, "corpus": "0846a_9b"},
     # the same fine-tune with v8-in's NEG_WEIGHT idea: labelled background cells weigh neg_weight times an ink cell in the cell loss
     "ft_0846a_9b_neg": {"run": "hercuenet_no0846a_ft_0846a_9b_neg5_3ep", "epochs": 3, "corpus": "0846a_9b", "neg_weight": 5.0},
-    # against the fuzzy maps of the 0846A + 0009B fine-tunes (cue reliance, lifted background): the cue is flat in `cue_dropout` of the 0846A and
+    # against the fuzzy maps of the 0846A + 0009B fine-tunes (cue reliance, lifted background): the cue is flat in `HercUeNet` of the 0846A and
     # 0009B samples (0.2 in mix28) so the raw slices must carry the prediction, and the lr decays by cosine to 0 over the run
     "ft_sharp": {"run": "hercuenet_no0846a_ft_0846a_9b_sharp_3ep", "epochs": 3, "corpus": "0846a_9b", "neg_weight": 5.0,
                  "cue_dropout": 0.6, "lr_cosine_final": 0.0},
@@ -176,7 +176,7 @@ FLAT_DEPTH, DEPTH_OFFSET, EVAL_STRIDE = 13, -1, 32
 
 
 def predict_prize_sheet(checkpoint: Path) -> "np.ndarray":
-    """cue_dropout prediction of the prize sheet, one value per 16 px cell (cached next to the figure, redone for a newer checkpoint)."""
+    """HercUeNet prediction of the prize sheet, one value per 16 px cell (cached next to the figure, redone for a newer checkpoint)."""
     import numpy as np
 
     cache = OUT / "preds" / f"{checkpoint.parent.name}__{checkpoint.stem}.npy"

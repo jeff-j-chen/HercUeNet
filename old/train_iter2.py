@@ -30,14 +30,14 @@ domain weight 3, native-noise bank off, 10 epochs.
   cue_pair_mil               asf_cue + depth-MIL from the MAE init; every view reads the cue of the window it actually shows
                              (jitter +-1 and the pair view +-2: cue_asf_morph_dm2/_dm1/_dp1/_dp2)
   cue_pair_mil_strict        cue_pair_mil + a negative is charged its worse depth view + view consistency (0.2) over every target cell
-  cue_dropout                asf_cue where 30% of training samples see a flat cue (128 over the papyrus): the raw slices must carry the ink
-  cue_dropout_agree          cue_dropout, rendered as the cellwise minimum of the real-cue and flat-cue prediction (eval only)
+  HercUeNet                asf_cue where 30% of training samples see a flat cue (128 over the papyrus): the raw slices must carry the ink
+  cue_dropout_agree          HercUeNet, rendered as the cellwise minimum of the real-cue and flat-cue prediction (eval only)
   halo_penalty               asf_cue + unsupervised cells within 2 cells (32 px) of labelled ink are pushed to 0, weighted by how ink-like the cue is
   depth_peak_smooth          idea2_depth_mil + neighbouring ink-like cells must prefer the same depth view (TV of the soft view choice)
   cross_gap_negatives        idea6_layout_prior with the between-line negatives bounded by the pooled lines of every winding
   small_loss_negatives       asf_cue + the 20% highest-loss ordinary negative cells leave the loss (noisy-label small-loss selection)
   slice_masking              asf_cue + 2 consecutive depth slices replaced by the mean of the rest in half the samples (speech time masking)
-  cue_dropout_labelsv3       cue_dropout rerun unchanged, for the rebuilt inklabels (v3)
+  cue_dropout_labelsv3       HercUeNet rerun unchanged, for the rebuilt inklabels (v3)
   cue_dropout_labelsv3_seed17  cue_dropout_labelsv3 with every seed changed to 17 (training seed, coordinate-hash split seed, cue-head init)
   depth_peak_smooth_labelsv3 depth_peak_smooth rerun unchanged, for the v3 inklabels
   small_loss_negatives_labelsv3  asf_cue + the 20% highest-loss ordinary negative AND positive cells leave the loss, v3 inklabels

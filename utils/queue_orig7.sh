@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # the orig7 experiment queue: all three models train on the same corpus, the 7 original PHerc0846A sheets + the 11 mix26 donors
-# (utils/mix6.py orig7; cue_dropout still omits the two sheets CUE_DROPPED that lose all ink to its exclusion zone), with the labels of
+# (utils/mix6.py orig7; HercUeNet still omits the two sheets CUE_DROPPED that lose all ink to its exclusion zone), with the labels of
 # commit 458f8f3 and the current prize-sheet exclusion. Strictly sequential (one GPU job at a time); logs in logs_orig7/.
 #   1. reader-v3   python3 finetune_readerv3.py --corpus orig7   3000 steps  -> reader-v3/runs/orig7_3000/ckpt_003000.pth
-#   2. cue_dropout python3 train.py (VESUVIUS_CORPUS=orig7)       3 epochs    -> models/runs/cue_dropout_labelsv6_orig7/final.pth
+#   2. HercUeNet python3 train.py (VESUVIUS_CORPUS=orig7)       3 epochs    -> models/runs/cue_dropout_labelsv6_orig7/final.pth
 #   3. v8-in       python3 finetune_v8in.py --corpus orig7        3 epochs    -> nader-fork/runs/v8in_orig7_3ep/model
 #   4. ensemble_eval.ipynb on the prize sheet with the three results (3x2 and 2x2 figures) -> output/ensemble/orig7/<sheet>/
-#   5. 0846A_eval.ipynb with the cue_dropout result on every PHerc0846A figure of the notebook except the remaining quick patches
+#   5. 0846A_eval.ipynb with the HercUeNet result on every PHerc0846A figure of the notebook except the remaining quick patches
 #      -> output/0846A/runs_cue_dropout_labelsv6_orig7_final/
 # A failed training does not stop the next one; the evaluations run only when all three results exist.
 #   tmux new -d -s orig7 'bash /vesuvius/utils/queue_orig7.sh'

@@ -4,7 +4,7 @@
 precomputed asf_morph map as a fourth input head (flat in 20% of the samples of 0846A, 0009B and 0172, always on the other scrolls), dual scale, strong nnPU and the text-region gate,
 on the mix28 corpus (12 PHerc0846A sheets + the labelled patches of PHerc0009B, 1447, 0841, 0172, 343 first letters, 0139, 1667, 0500P2
 and PHerc0306B; utils/mix6.py; a donor without ink or train mask is skipped), 4 epochs, seed 17. reader-v3 and v8-in train on the same corpus.
-The PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi prize sheet is rendered at the end and never trained on; the 0846A sheets lose their papyrus within
+The PRIZESHEET_11_11_flatboi_flatboi_abf prize sheet is rendered at the end and never trained on; the 0846A sheets lose their papyrus within
 12 voxels of it plus the model's context reach, and training refuses to start until those masks match the prize sheet.
 Checkpoints go to models/runs/<run>/ (final.pth, the last epoch, is the one ensemble_eval.ipynb reads)
 and TensorBoard to runs/<run>/; an existing run is never overwritten (a _2, _3 ... suffix is used).
@@ -5025,7 +5025,7 @@ def preflight_inputs(config, build_init: bool = False) -> None:
             ]
     stale_exclusion = []
     if config.data.holdout_exclusion_dir:
-        # every trained 0846A sheet must carry its discard mask, computed against the current prize sheet with the cue_dropout
+        # every trained 0846A sheet must carry its discard mask, computed against the current prize sheet with the HercUeNet
         # radius and context reach, and a cue built without the prize-sheet zone; else it would train on the prize sheet
         missing_files += [
             path for path in (os.path.join(config.data.holdout_exclusion_dir, f"{sid}.png")
@@ -5109,6 +5109,7 @@ def main(configure=None) -> None:
     parser.add_argument("--download", action="store_true",
                         help="first run `assemble_training_segments.py --mix28` (downloads and sets up the mix28 data; skips what exists)")
     args = parser.parse_args()
+    args_smoke = args.smoke
 
     config = Config()
     # experiment runners (k_folds.py, train_sequence.py) edit the default config here, before any path resolution; a plain
@@ -5192,8 +5193,12 @@ def main(configure=None) -> None:
         cleanup_mmap_files()
     checkpoints = sorted(file for file in os.listdir(config.model_dir) if file.endswith(".pth"))
     print(f"[done] {name}: {len(checkpoints)} checkpoint(s) in {config.model_dir}/ -> {', '.join(checkpoints)}\n"
-          f"       final.pth (last epoch) is the checkpoint ensemble_eval.ipynb reads; TensorBoard: {os.path.join(config.tra.log_dir, name)}",
+          f"       epoch_3.pth is the checkpoint ensemble_eval.ipynb reads (final.pth = the last epoch); TensorBoard: {os.path.join(config.tra.log_dir, name)}",
           flush=True)
+    if configure is None and not args_smoke:
+        from utils import mix6
+
+        print(mix6.describe_selection(), flush=True)
 
 
 if __name__ == "__main__":

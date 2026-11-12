@@ -1,0 +1,45 @@
+{
+    "area_cm2": 11.815366737568977,
+    "area_vx2": 13480622.047640279,
+    "bbox": [
+        [
+            1845.102294921875,
+            2508.24560546875,
+            11683.55859375
+        ],
+        [
+            6552.18359375,
+            4069.85498046875,
+            13928.33984375
+        ]
+    ],
+    "date_last_modified": "20261109092212411",
+    "elapsed_time_s": 17.8143691,
+    "format": "tifxyz",
+    "grid_offset": [
+        2,
+        2
+    ],
+    "max_gen": 95,
+    "name": "PRIZESHEET_11_11",
+    "scale": [
+        0.05000000074505806,
+        0.05000000074505806
+    ],
+    "seed": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "seed_surface_id": "PRIZESHEET_11_11_flatboi",
+    "tags": {
+        "approved": {
+            "user": "ChenJeff"
+        }
+    },
+    "type": "seg",
+    "uuid": "PRIZESHEET_11_11_flatboi",
+    "vc3d_segment_display_id": "PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy",
+    "vc3d_segment_folder": "patches",
+    "vc3d_segment_folder_default_palette": true
+}

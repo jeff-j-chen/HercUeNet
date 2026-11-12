@@ -1,6 +1,6 @@
 """train_sequence: controlled single-purpose runs, one process each (logs ./runs_sequence, checkpoints models/runs_sequence).
 
-default queue (add-one domain transfer to PHerc0846A), all cue_dropout recipe (asf cue + 30% flat-cue dropout, depth jitter +-1
+default queue (add-one domain transfer to PHerc0846A), all HercUeNet recipe (asf cue + 30% flat-cue dropout, depth jitter +-1
 reading the matching shifted cue map), the labels as they are on disk:
   cue_dropout_labelsv4               pure PHerc0846A baseline (the 7 trained patches, no PHerc0009B)
   cue_dropout_labelsv4_add_<key>     PHerc0846A + one added domain, domain weights 1:1; the added patches are rendered too
@@ -116,7 +116,7 @@ def configure_fragment(config, fragment: int) -> None:
 
 
 def configure_domain(config, name: str, groups: dict[str, list[int]], weight_0846a: int = 1) -> None:
-    """cue_dropout recipe on the 7 trained 0846A patches (weight_0846a) plus added domains (weight 1 each)."""
+    """HercUeNet recipe on the 7 trained 0846A patches (weight_0846a) plus added domains (weight 1 each)."""
     ids = [sid for group in groups.values() for sid in group]
     base._base_recipe(config, old_set=True)  # whole-corpus config (scroll configs, native-noise bank), pruned below
     data = config.data

@@ -193,13 +193,15 @@ def compute_surface_anchors(
     tiles: int = 384,
     tile: int = 64,
     seed: int = 0,
+    volume=None,
 ) -> dict:
-    """raw gap level (1st percentile) and papyrus level (median at the fitted surface) from sampled tiles."""
+    """raw gap level (1st percentile) and papyrus level (median at the fitted surface) from sampled tiles; `volume` = the render
+    already in memory (skips the slow chunk-by-chunk zarr reads)."""
     import cv2
     sid = str(scroll_id)
     # sibling volumes (<id>.translated) share the original's mask and fitted surface
     base = sid.split(".", 1)[0]
-    vol = zarr.open(os.path.join(zarr_path, f"{sid}.zarr"), mode="r")
+    vol = volume if volume is not None else zarr.open(os.path.join(zarr_path, f"{sid}.zarr"), mode="r")
     _, height, width = map(int, vol.shape)
     mask = cv2.imread(os.path.join(mask_dir, f"{base}.png"), cv2.IMREAD_GRAYSCALE)
     if mask is None:

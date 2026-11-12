@@ -10,7 +10,7 @@ reported per patch and checkpoint, for feature weights (feat), biases/norms/head
   ccos  the same after removing the direction shared by all patches (feat only)
   rel   reliability of the K-batch mean (split-half cosine, Spearman-Brown);  corr  cos / sqrt(rel_patch * rel_target)
   r1    mean cosine between two single-batch gradients of the same patch (is one batch enough?)
-patches without a cue map are fed a flat cue (128/255), the input the cue-dropout recipe trains on; fine scans read
+patches without a cue map are fed a flat cue (128/255), the input the HercUeNet recipe trains on; fine scans read
 their .matched volumes and get the native noise bank, as in training.
 
 usage: python3 grad_affinity.py [--batches 12] [--patches id,id] [--target id] [--ckpt name=path ...] [--out output/grad_affinity]

@@ -1,6 +1,6 @@
 """figures and numbers of utils/prize_depth_tests.py from its saved maps (output/prize_depth_tests/<test>_{reader,cue}.npy).
 
-cue_dropout's map has NaN cells (outside the eroded papyrus the sequence model does not predict), so the limits, the statistics
+HercUeNet's map has NaN cells (outside the eroded papyrus the sequence model does not predict), so the limits, the statistics
 and the product are taken over the finite pixels only; the first version of the tests took them over the whole mask.
 """
 from __future__ import annotations

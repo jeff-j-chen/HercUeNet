@@ -999,7 +999,7 @@ def apply_best_run(config) -> None:
 # the best-run recipe (192 px field, dual scale, strong nnPU, text-region gate, asf_morph cue as a fourth input head) on the mix28 corpus
 # (utils/mix6.py: 14 trained 0846A sheets at domain weight 2 (incl. the 4 train-only fiber_only_20261029d_flatboi neighbours and the 3
 # sheets added on 2026-11-02) plus PHerc0009B, 1447, 0841, 0172, the 343 first letters, 0139, 1667 and 0500P2 at 1), with the cue
-# replaced by a flat map per domain (20% on 0846A, 0009B and 0172, always elsewhere: utils/mix6.py CUE_DROPOUT_BY_DOMAIN), the v6 ring parameters, seed 17 and 4 epochs. The prize sheet (PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi)
+# replaced by a flat map per domain (20% on 0846A, 0009B and 0172, always elsewhere: utils/mix6.py CUE_DROPOUT_BY_DOMAIN), the v6 ring parameters, seed 17 and 4 epochs. The prize sheet (PRIZESHEET_11_11_flatboi_flatboi_abf)
 # is rendered, never trained; the 0846A sheets lose their papyrus within 12 voxels of it plus the full context reach
 # (utils/holdout_exclusion.py). Half-brightness strokes of the 0846A labels (48..207, see utils/dataloader.split_extra_labels) are
 # hard negatives.
@@ -1007,7 +1007,7 @@ def apply_best_run(config) -> None:
 MIX6_EPOCHS = 4
 MIX6_SAVE_EPOCHS = CUE_SAVE_EPOCHS  # epoch_1/2/3/4.pth (utils/mix6.py CUE_EPOCH_PATHS)
 MIX6_WARMUP_EPOCHS = 2
-MIX6_SEED = 17
+MIX6_SEED = 17  # the split seed (coordinate hash) of every HercUeNet run
 MIX6_MAE192 = "models/mae_nnunet_192_campaign34_early_gated_fiber_native96_surfacenorm_campaign40_2k.pth"
 # the 192 MAE grown to four input heads (utils/cue_expand.py build_mix6_init); train.py builds it when it is missing
 MIX6_INIT = "models/init_mae192_cue4_seed17.pth"
@@ -1072,7 +1072,9 @@ def apply_mix6_run(config) -> None:
     tra.cue_head_lr_scale = 5.0
     # v6 ring parameters, seed 17 (training seed, coordinate-hash split seed), 4 epochs
     data.ring_close_r, data.ring_gap_r, data.ring_shell_r = 2, 2, 4
-    tra.seed = data.coordinate_hash_seed = MIX6_SEED
+    from .mix6 import SEED as MIX6_TRAIN_SEED
+    data.coordinate_hash_seed = MIX6_SEED
+    tra.seed = MIX6_TRAIN_SEED["cue_dropout"]
     tra.n_epochs = tra.eval_int = tra.save_int = MIX6_EPOCHS
     tra.save_epochs = MIX6_SAVE_EPOCHS
     tra.warmup_epochs = MIX6_WARMUP_EPOCHS

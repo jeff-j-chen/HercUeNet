@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # the mix28 evaluation (called at the end of utils/queue_mix28.sh, or alone once the trainings have run); logs in logs_mix28/.
-#   1-3. ensemble_eval.ipynb, three 3x2 ensembles on the prize sheet (reader-v3 step / cue_dropout epoch / v8-in epoch):
+#   1-3. ensemble_eval.ipynb, three 3x2 ensembles on the prize sheet (reader-v3 step / HercUeNet epoch / v8-in epoch):
 #        4.1  4000 / 4 / 4  -> output/ensemble/mix28_e4/<prize sheet>/
 #        4.2  3000 / 3 / 3  -> output/ensemble/mix28_e3/<prize sheet>/
 #        4.3  2000 / 2 / 2  -> output/ensemble/mix28_e2/<prize sheet>/
-#   4.   0846A_eval.ipynb with the cue_dropout epoch 4: the prize sheet, the 14 trained 0846A sheets, the 14 donor patches
+#   4.   0846A_eval.ipynb with the HercUeNet epoch 4: the prize sheet, the 14 trained 0846A sheets, the 14 donor patches
 #        (3 new in mix28), the held-out patches (out_4 / out_5 and the 3 quick patches) -> output/0846A/cue_dropout_labelsv6_mix28_*_epoch_4/
 # v8-in epoch N is the Lightning checkpoint trained-epoch<N-1>.ckpt (0-based), exported on demand.
 set -u

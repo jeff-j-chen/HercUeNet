@@ -1,8 +1,8 @@
-"""light ensemble: the fine-tuned reader-v3 and cue_dropout only (no v8-in, no reader-v3 base), for sheets without a flat alias.
+"""light ensemble: the fine-tuned reader-v3 and HercUeNet only (no v8-in, no reader-v3 base), for sheets without a flat alias.
 
 Each map is stretched to its own p1-p99.5 over the sheet mask and the two are combined as the mean of their z-scores and as a
 mid-boost composite (utils/depth_ensemble.py), as in ensemble_eval.ipynb. Predictions are cached (reader-v3 under
-output/ensemble_light/<sheet>/cache/, cue_dropout under output/cue_dropout/<sheet>/ via infer_cue_dropout.py).
+output/ensemble_light/<sheet>/cache/, HercUeNet under output/cue_dropout/<sheet>/ via infer_cue_dropout.py).
 
   python3 ensemble_light.py fiber_only_abf2_20261029c_flatboi [more sheets...] [--mask-dir masks/extras]
 

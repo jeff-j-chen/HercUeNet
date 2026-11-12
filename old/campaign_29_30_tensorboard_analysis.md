@@ -19,7 +19,7 @@ These campaigns measure held-out regions within known patches, not wholly unseen
 - Completed standard 17-patch runs: 28.
 - Completed fragment-only runs: 3.
 - Partial: full `pcgrad` has epochs 0-3.
-- No usable metrics: `cue_dropout` contains only `Run/Initializing` and `Run/Initialized`.
+- No usable metrics: `HercUeNet` contains only `Run/Initializing` and `Run/Initialized`.
 - No event directory: Campaign 29 `coordinate_hash_split`; Campaign 30 `researcher_like`.
 - Campaign 29 `baseline` and `domain_cvar` used `compile_model=True`; the other analyzed runs used `False`. The baseline averaged 135.0 s/epoch versus 193.0 s/epoch for Campaign 30's uncompiled control.
 

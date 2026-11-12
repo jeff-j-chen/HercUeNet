@@ -2,7 +2,7 @@
 
 For each new sheet, every trained sheet's papyrus is mapped to 3D mesh points; the trained sheet with the largest area
 within OVERLAP_VOX of the new sheet is picked. Its inklabel is carried onto the new sheet through the nearest 3D point and
-drawn over the quick cue_dropout inference in output/cue_dropout/<sheet>/prediction.npy.
+drawn over the quick HercUeNet inference in output/cue_dropout/<sheet>/prediction.npy.
 
   python3 fiber_overlap.py [--vox 4]
 """

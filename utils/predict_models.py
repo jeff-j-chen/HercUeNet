@@ -1,6 +1,6 @@
 """inference of the three mix6 models on one sheet, each the way it reads a scroll natively.
 
-  cue_dropout  the sequence model (train.py): flat depth-13 surface (window offset -1 for 0846A), one probability per 16 px cell;
+  HercUeNet  the sequence model (train.py): flat depth-13 surface (window offset -1 for 0846A), one probability per 16 px cell;
                run in the caller's process (ensemble_eval.ipynb / 0846A_eval.ipynb replay the checkpoint's run config)
   reader_v3    koine_machines.inference.infer in reader-v3/.venv: the checkpoint's 17 central layers, 384 px tiles, hann blend,
                overlap 0.5, one probability per pixel
@@ -123,7 +123,7 @@ np.save(sys.argv[4], prediction.astype(np.float16))
 
 
 def detect_kind(checkpoint) -> str:
-    """cue_dropout (a flat state dict of the sequence model), reader_v3 (a koine checkpoint with 'model' and 'config') or v8in
+    """HercUeNet (a flat state dict of the sequence model), reader_v3 (a koine checkpoint with 'model' and 'config') or v8in
     (an exported model folder, model.safetensors, or a Lightning .ckpt)."""
     path = Path(str(checkpoint))
     if path.is_dir():
@@ -176,14 +176,23 @@ def drop_stale(cached, zarr_path, checkpoint) -> None:
             path.unlink()
 
 
-def predict_reader(zarr_path, checkpoint, tif_path, batch_size: int = 4) -> np.ndarray:
-    """reader-v3 map in [0, 1] at the render's pixel grid (the CLI's uint8 tiff is kept next to the cached .npy)."""
+def predict_reader(zarr_path, checkpoint, tif_path, batch_size: int = 4, layer_shift: int = 0) -> np.ndarray:
+    """reader-v3 map in [0, 1] at the render's pixel grid (the CLI's uint8 tiff is kept next to the cached .npy).
+    layer_shift moves the 17-layer window along the depth (0 = the central one); the caller names the tiff by the shift."""
     tif, python = Path(tif_path), venv_python(READER_DIR / ".venv")
     drop_stale([tif, tif.with_suffix(".npy")], zarr_path, checkpoint)
     if not tif.is_file():
         tif.parent.mkdir(parents=True, exist_ok=True)
+        window = []
+        if layer_shift:
+            import zarr
+
+            start, end = native_window("reader_v3", zarr.open(str(zarr_path), mode="r").shape[0], checkpoint)
+            if start + layer_shift < 0 or end + layer_shift > zarr.open(str(zarr_path), mode="r").shape[0]:
+                raise ValueError(f"reader-v3 window {start}-{end} cannot move by {layer_shift}")
+            window = ["--layer-start", str(start + layer_shift), "--layer-end", str(end + layer_shift)]
         subprocess.run([python, "-m", "koine_machines.inference.infer", str(local_zarr(zarr_path)), str(checkpoint), str(tif), "--overlap", "0.5",
-                        "--blend-mode", "hann", "--direction", "forward", "--no-compile", "--batch-size", str(batch_size)],
+                        "--blend-mode", "hann", "--direction", "forward", "--no-compile", "--batch-size", str(batch_size), *window],
                        cwd=READER_DIR, check=True)
     npy = tif.with_suffix(".npy")
     if not npy.is_file():  # imagecodecs (LZW) lives in the reader environment
@@ -210,15 +219,17 @@ def v8in_model_dir(checkpoint, export_dir) -> Path:
     return export_dir
 
 
-def v8in_layers(zarr_path, folder) -> Path:
-    """the central 24 layers of the render as 00.tif..23.tif (uint8, forward order)."""
+def v8in_layers(zarr_path, folder, shift: int = 0) -> Path:
+    """the central 24 layers of the render (moved by `shift` layers) as 00.tif..23.tif (uint8, forward order)."""
     import tifffile
     import zarr
 
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     volume = zarr.open(str(local_zarr(zarr_path)), mode="r")
-    start = (volume.shape[0] - V8IN_DEPTH) // 2
+    start = (volume.shape[0] - V8IN_DEPTH) // 2 + shift
+    if start < 0 or start + V8IN_DEPTH > volume.shape[0]:
+        raise ValueError(f"v8-in window cannot move by {shift} in a {volume.shape[0]}-layer render")
     slab = np.asarray(volume[start:start + V8IN_DEPTH])
     for index in range(V8IN_DEPTH):
         path = folder / f"{index:02d}.tif"
@@ -227,9 +238,9 @@ def v8in_layers(zarr_path, folder) -> Path:
     return folder
 
 
-def predict_v8in(zarr_path, checkpoint, cache_dir, batch_size: int = 16, layers=None) -> np.ndarray:
-    """v8-in map in [0, 1] at the render's pixel grid, cached in cache_dir. `layers` = an already staged folder of the 24 tiffs,
-    otherwise they are staged in a scratch folder that is removed afterwards."""
+def predict_v8in(zarr_path, checkpoint, cache_dir, batch_size: int = 16, layers=None, shift: int = 0) -> np.ndarray:
+    """v8-in map in [0, 1] at the render's pixel grid, cached in cache_dir (the caller names it by the shift). `layers` = an already
+    staged folder of the 24 tiffs, otherwise they are staged in a scratch folder (window moved by `shift` layers) that is removed afterwards."""
     import shutil
     import tempfile
 
@@ -244,7 +255,7 @@ def predict_v8in(zarr_path, checkpoint, cache_dir, batch_size: int = 16, layers=
         LOCAL_ZARR_DIR.mkdir(parents=True, exist_ok=True)
         scratch = None if layers is not None else tempfile.mkdtemp(dir=LOCAL_ZARR_DIR)
         try:
-            layers = Path(layers) if layers is not None else v8in_layers(zarr_path, Path(scratch) / "layers")
+            layers = Path(layers) if layers is not None else v8in_layers(zarr_path, Path(scratch) / "layers", shift)
             subprocess.run([venv_python(FORK_DIR / ".venv"), "-c", V8IN_PREDICT, str(FORK_DIR), str(model_dir), str(layers),
                             str(prediction_path), str(batch_size)], check=True)
         finally:

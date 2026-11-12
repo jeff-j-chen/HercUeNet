@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The mix28 trainings against the current prize sheet (utils/mix6.py RUN_TAG _ps3), then three ensembles and the training-fragment figures.
 # Strictly sequential (one GPU job at a time), logs in logs_ps3/. Waits for the cue build (tmux prep_ps3: python3 -m utils.mix6 --build).
-#   0. check       python3 -m utils.mix6              read-only corpus check; cue_dropout only trains when it passes
-#   1. cue_dropout python3 train.py                   4 epochs -> models/runs/cue_dropout_labelsv6_mix28_ps3/ (epoch_1..4.pth)
+#   0. check       python3 -m utils.mix6              read-only corpus check; HercUeNet only trains when it passes
+#   1. HercUeNet python3 train.py                   4 epochs -> models/runs/cue_dropout_labelsv6_mix28_ps3/ (epoch_1..4.pth)
 #   2. reader-v3   python3 finetune_readerv3.py       4000-step schedule, stopped once ckpt_002000.pth is written -> reader-v3/runs/mix28_ps3/ (ckpt_001000.pth, ckpt_002000.pth)
 #   3. v8-in       python3 finetune_v8in.py           4-epoch cosine schedule, stopped once trained-epoch1.ckpt is written -> nader-fork/runs/v8in_mix28_4ep_ps3/
 #                                                     (trained-epoch0.ckpt = epoch 1, trained-epoch1.ckpt = epoch 2)
@@ -10,7 +10,7 @@
 #        1  cue epoch 2, reader step 1000, v8-in epoch 1  mix28_ps3_c2_r1000_v1
 #        2  cue epoch 4, reader step 2000, v8-in epoch 2  mix28_ps3_c4_r2000_v2
 #        3  cue epoch 4, reader step 2000, v8-in epoch 1  mix28_ps3_c4_r2000_v1
-#   5. fragments   ensemble 3 on every sheet cue_dropout trained on (ENSEMBLE_SHEET=train0846a), then utils/label_overlay_figures.py:
+#   5. fragments   ensemble 3 on every sheet HercUeNet trained on (ENSEMBLE_SHEET=train0846a), then utils/label_overlay_figures.py:
 #                  ensemble | v8-in epoch 1, and both with the red inklabel overlay -> output/label_figures/<sheet>.png
 # Stopping a schedule early keeps exactly the weights the full run has at that point (the lr schedule does not look ahead).
 # A failed step does not stop the next one; an ensemble is skipped when one of its checkpoints is missing.

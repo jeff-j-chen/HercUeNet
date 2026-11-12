@@ -1,7 +1,7 @@
 """how much of each model's kept training supervision a new prize-sheet candidate would contaminate.
 
 For every trained 0846A sheet (utils/mix6.SHEETS_0846A) this applies each model's own exclusion rule (utils/holdout_exclusion.specs:
-cue_dropout 12 vox + its context reach, reader-v3 18 vox, v8-in 25 vox) against the candidate sheet's mesh and reports the
+HercUeNet 12 vox + its context reach, reader-v3 18 vox, v8-in 25 vox) against the candidate sheet's mesh and reports the
 papyrus and ink that the current masks KEPT (trained on) but that rule would discard. The current prize sheet is run as a
 check (expected 0).
 

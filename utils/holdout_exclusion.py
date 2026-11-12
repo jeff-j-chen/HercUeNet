@@ -1,11 +1,11 @@
 """discard the parts of the trained PHerc0846A sheets near the prize sheet (utils/mix6.py HOLDOUT_NAME, now
-PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi; every earlier prize sheet is superseded).
+PRIZESHEET_11_11_flatboi_flatboi_abf; every earlier prize sheet is superseded).
 
 the neighbour sheets were traced next to the prize sheet and in places run onto it, so their renders and labels would leak
 it into training. For every trained 0846A sheet this measures, at each mesh point, the 3D distance to the prize-sheet mesh
 (the zone = distance <= the model's radius) and writes one discard mask per model in the render frame (255 = discard):
 
-  cue_dropout  holdout_exclusion/<alias>.png         12 vx zone, dilated by the model's full context reach (CUE_CONTEXT_PX:
+  HercUeNet  holdout_exclusion/<alias>.png         12 vx zone, dilated by the model's full context reach (CUE_CONTEXT_PX:
                                                      a kept 16 px cell never has a 192 px context window that touches the zone);
                holdout_exclusion/zone/<alias>.png    the 12 vx zone itself: the asf cue of the sheet is built without it
   reader-v3    holdout_exclusion_reader/<alias>.png  18 vx zone
@@ -49,7 +49,7 @@ MIN_KEPT_INK_CM2 = 0.001  # a trained sheet must keep at least this much ink aft
 
 @functools.lru_cache(maxsize=1)
 def cue_context_reach() -> int:
-    """render px from any pixel of a supervised cue_dropout cell to the farthest pixel its input can read (Chebyshev):
+    """render px from any pixel of a supervised HercUeNet cell to the farthest pixel its input can read (Chebyshev):
     half of (context window + prediction core) plus the context jitter, from the training config itself (148 for mix26)."""
     from utils.config import Config, apply_mix6_run
 
@@ -275,7 +275,7 @@ def _papyrus(render) -> np.ndarray:
 
 def build_all(force: bool = False, models=None, aliases=None) -> None:
     """every model's masks that are missing or computed against another prize sheet / radius (all of them with force):
-    one distance map per trained sheet, then cue_dropout 12 vx + context reach (+ its zone), reader-v3 18 vx, v8-in 25 vx.
+    one distance map per trained sheet, then HercUeNet 12 vx + context reach (+ its zone), reader-v3 18 vx, v8-in 25 vx.
     aliases: compute only these sheets and merge them into the existing summaries (the masks of the other sheets are left
     untouched, so their asf cues do not become older than their zone); ignored for a model whose summary is for another prize
     sheet, radius or context."""
@@ -350,7 +350,7 @@ def build_all(force: bool = False, models=None, aliases=None) -> None:
         print(f"[exclusion] {model}: masks in {directory}, figures in {figure_dir}")
 
 
-# who dropped a pixel. reader-v3's zone lies inside v8-in's, but cue_dropout's (12 vx + context reach) follows its own geometry,
+# who dropped a pixel. reader-v3's zone lies inside v8-in's, but HercUeNet's (12 vx + context reach) follows its own geometry,
 # so the zones are not nested: every combination is its own category
 DROP_CATEGORIES = (
     ("kept by all three", (220, 0, 0)),

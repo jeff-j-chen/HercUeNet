@@ -1,9 +1,9 @@
 """how much of a new PHerc0846A sheet the mix6 models were trained on, given the exclusion masks built for straightened2.
 
-For every trained 0846A sheet, the pixels each model kept (papyrus minus its exclusion mask: 14 vox for cue_dropout and reader-v3,
+For every trained 0846A sheet, the pixels each model kept (papyrus minus its exclusion mask: 14 vox for HercUeNet and reader-v3,
 25.5 vox for v8-in) are mapped to their 3D mesh points. At each point of the new sheet this measures the distance to the nearest
 kept training point (and kept inked point), and reports the new sheet's area within the depth each model reads around a training
-surface (cue_dropout 4, reader-v3 8, v8-in 11.5 voxels) and within the 14 / 25.5 voxel guard. straightened2 is run as the reference
+surface (HercUeNet 4, reader-v3 8, v8-in 11.5 voxels) and within the 14 / 25.5 voxel guard. straightened2 is run as the reference
 the masks were built for.
 
   python3 exclusion_vs_sheet.py [--sheet fiber_only_20261029d_flatboi]

@@ -8,7 +8,7 @@ PHerc1447 windings are assembled from the released 24-layer Hugging Face renders
 depth_reversed.json are written directly in the reversed (canonical) depth order and carry
 attrs depth_flipped=true; there is no post-hoc flip.
 
-The 15 PHerc0846A sheets of MESHES_0846A (the 14 trained mix26 sheets and the PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi prize sheet (the 2026-11-09 remake), the only
+The 15 PHerc0846A sheets of MESHES_0846A (the 14 trained mix26 sheets and the PRIZESHEET_11_11_flatboi_flatboi_abf prize sheet (the 2026-11-11 sheet, canonical since 2026-11-12), the only
 prize sheet that is assembled) are rendered from their tifxyz meshes with assemble_test_segments.render_fragment (the
 fiber_only sheets like extras: uint8, mask under masks/extras linked into masks/; the prize sheet likewise, already upright) and get their flat
 depth-13 alias (symlinked zarr/mask/label/train mask, flat surface, norm, surface anchors) instead of steps 2-5. The same goes for the
@@ -41,7 +41,7 @@ usage:
   python assemble_training_segments.py --degrader models/c39_degrader.pth   # learned-degrader .translated siblings
 
 --mix28 (off by default) downloads and sets up exactly the 29 sheets / patches of the default corpus (utils/mix6.py): the 28 registered
-patches of mix28 (cue_dropout, reader-v3 and v8-in all train on it, so one command serves all three) plus the prize sheet. The 28:
+patches of mix28 (HercUeNet, reader-v3 and v8-in all train on it, so one command serves all three) plus the prize sheet. The 28:
 the 14 trained PHerc0846A sheets (7 auto_grown sheets + the 4 fiber_only_20261029d_flatboi neighbours, train only, plus
 fiber_only_abf2_20261029c_flatboi, its +28 voxel offset _p28 and PHerc0846A test surface 6 = 20260921094413) and the 14 donor patches:
 PHerc0009B (4 incl. p9b_592, p9b_642, p9b_639), PHerc1447 w060, PHerc0841 (2 incl. p841_w00), PHerc0172 w087, the PHerc0343 first letters,
@@ -49,7 +49,7 @@ PHerc0139 w041, PHerc1667 w013 (fine scan, read as its .matched sibling), PHerc0
 p306b_letters (the 41-layer claim-surface render of Prodigle/pherc0306b-first-letters, downloaded from Hugging Face and resampled like an
 8.64 um surface volume). p9b_642, p9b_639 and p306b_letters are hand-labelled like the other donors (a donor without ink or without train mask is skipped by the
 trainings, utils/mix6.py is_labelled). The 29th is the prize sheet
-PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi (upright; alias 20261109120000). (The earlier mix25 corpus also had the PHerc0814 patches and 0139 title;
+PRIZESHEET_11_11_flatboi_flatboi_abf (upright; alias 20261112120000). (The earlier mix25 corpus also had the PHerc0814 patches and 0139 title;
 they stay assembled but are no longer set up.)
 Per scroll that is the volume + mask, norm, surface detection
 (PHerc1447: the flat surface at its measured centre layer; PHerc0846A: the flat depth-13 alias), surface anchors, the prize-sheet
@@ -87,7 +87,7 @@ VOL9_NAME = "9.362um-1.2m-113keV-volume-20250728140407.zarr"
 # depth-13 aliases (assemble_test_segments.make_flat_alias).
 # name (utils/mix6.py SHEETS_0846A / HOLDOUT_NAME) -> (render zarr id, flat alias, mesh under tifxyz/)
 VOL_0846A = (f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0", "14019,7726,7726")
-PRIZE_NAME = "PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi"  # utils/mix6.py PRIZE_SHEET
+PRIZE_NAME = "PRIZESHEET_11_11_flatboi_flatboi_abf"  # utils/mix6.py PRIZE_SHEET
 MESHES_0846A = {
     "auto_grown_20260927134928530_abf": (
         "20260927134928", "20260927134931", "quick_patches_from_D/PHerc0846A/auto_grown_20260927134928530_abf"),
@@ -101,10 +101,10 @@ MESHES_0846A = {
        for suffix, render, alias in (
            ("in_1", "20261012065816", "20261012065817"), ("out_1", "20261012065818", "20261012065819"),
            ("out_2", "20261012065820", "20261012065821"), ("out_3", "20261012065822", "20261012065823"))},
-    # the PRIZE sheet (the 2026-11-09 remake of PRIZESHEET_NEW): the only prize sheet that is assembled, never trained or validated on. It
+    # the PRIZE sheet (the 2026-11-11 sheet, canonical since 2026-11-12): the only prize sheet that is assembled, never trained or validated on. It
     # renders like assemble_test_segments extras (zarr id = mesh name, uint8, mask under masks/extras linked into masks/ for the alias) and
     # is upright without ROTATE_180 like PRIZESHEET_NEW. The earlier prize sheets are kept as evaluation renders (EVAL_PRIZE_OLD).
-    PRIZE_NAME: (PRIZE_NAME, "20261109120000", PRIZE_NAME),
+    PRIZE_NAME: (PRIZE_NAME, "20261112120000", PRIZE_NAME),
     # the 4 fibre neighbour sheets of straightened2 / fiber_only_20261029d_flatboi (train only), rendered as extras like the prize sheet
     **{f"fiber_only_20261029d_flatboi_{suffix}": (
         f"fiber_only_20261029d_flatboi_{suffix}", alias, f"fiber_only_20261029d_flatboi_{suffix}")

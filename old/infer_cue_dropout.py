@@ -1,4 +1,4 @@
-"""cue_dropout inference on rendered sheets without a flat alias (masks under masks/extras), as ensemble_eval.ipynb runs it:
+"""HercUeNet inference on rendered sheets without a flat alias (masks under masks/extras), as ensemble_eval.ipynb runs it:
 flat depth-13 surface, window offset -1, surface-anchor norm and pre_clahe cue computed from the render.
 
   python3 infer_cue_dropout.py fiber_only_20261029d_flatboi_in_1 [more sheets...]

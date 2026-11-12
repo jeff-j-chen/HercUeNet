@@ -1,6 +1,6 @@
 """plain 2x2 figures of every training sheet for relabelling, in output/label_figures/<sheet>.png:
 
-  z-score composite (reader-v3 + HercUeNet + v8-in, ensemble_eval.ipynb) | v8-in epoch 1
+  z-score composite (reader-v3 + HercUeNet + v8-in, ensemble_eval.ipynb) | v8-in epoch 3
   the same two with the red inklabel overlay (dilated_inklabels/<alias>.png, as 0846A_eval.ipynb draws it)
 
 [ENSEMBLE_SUBDIR=<output/ensemble folder of an ENSEMBLE_SHEET=train0846a run>] python3 -m utils.label_overlay_figures [sheet name ...]
@@ -20,8 +20,10 @@ from utils.fast_figure import colorize, orient_display, red_overlay, save_panel_
 
 Image.MAX_IMAGE_PIXELS = None
 REPO = Path(__file__).resolve().parent.parent
-ENSEMBLE = REPO / "output" / "ensemble" / os.environ.get("ENSEMBLE_SUBDIR", "mix28_ps3_c4_r2000_v1")
-OUT = REPO / "output" / "label_figures"
+ENSEMBLE = REPO / "output" / "ensemble" / os.environ.get("ENSEMBLE_SUBDIR", "mix28_ps4_s1_c3_r1000_v3")
+OUT = REPO / "output" / os.environ.get("LABEL_FIGURES_DIR", "label_figures_ps4")
+V8IN_CACHE = os.environ.get("V8IN_CACHE", "v8_in__mix28_fine_tune__epoch_3")  # the v8-in cache folder of the ensemble run
+V8IN_TITLE = os.environ.get("V8IN_TITLE", "v8-in epoch 3")
 BAD = (0.78, 0.86, 0.95)
 STRETCH = (1.0, 99.5)
 V8IN_FLOOR = 50.0  # the notebook shows v8-in with its median as 0
@@ -29,7 +31,7 @@ V8IN_FLOOR = 50.0  # the notebook shows v8-in with its median as 0
 
 def render(alias: int, render_id: str, name: str) -> Path:
     folder = ENSEMBLE / name
-    z_path, v8in_path = folder / "ensemble_z_score.npy", folder / "cache" / "v8_in__mix28_fine_tune__epoch_1" / "v8in_prediction.npy"
+    z_path, v8in_path = folder / "ensemble_z_score.npy", folder / "cache" / V8IN_CACHE / "v8in_prediction.npy"
     if not (z_path.is_file() and v8in_path.is_file()):
         raise FileNotFoundError(f"{name}: ensemble not finished ({z_path.name}, v8in cache)")
     mask = cv2.imread(str(REPO / "masks" / f"{render_id}.png"), cv2.IMREAD_GRAYSCALE) > 0
@@ -54,9 +56,9 @@ def render(alias: int, render_id: str, name: str) -> Path:
     display_label = orient_display(label, name)
     cell_hw = z_rgb.shape[:2]
     rows_out = [
-        [("z-score composite", z_rgb, cv2.INTER_AREA, None), ("v8-in epoch 1", v8in_rgb, cv2.INTER_AREA, None)],
+        [("z-score composite", z_rgb, cv2.INTER_AREA, None), (V8IN_TITLE, v8in_rgb, cv2.INTER_AREA, None)],
         [("z-score composite | red inklabel overlay", red_overlay(z_rgb, display_label), cv2.INTER_AREA, None),
-         ("v8-in epoch 1 | red inklabel overlay", red_overlay(v8in_rgb, display_label), cv2.INTER_AREA, None)],
+         (f"{V8IN_TITLE} | red inklabel overlay", red_overlay(v8in_rgb, display_label), cv2.INTER_AREA, None)],
     ]
     path = OUT / f"{name}.png"
     save_panel_grid(rows_out, cell_hw, str(path), gap_px=24)

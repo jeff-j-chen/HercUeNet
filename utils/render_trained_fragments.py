@@ -1,7 +1,7 @@
-"""render every fragment the cue_dropout model trained on (the 12 cue_dropout PHerc0846A sheets + the 14 donor patches) with
+"""render every fragment the HercUeNet model trained on (the 12 HercUeNet PHerc0846A sheets + the 14 donor patches) with
 0846A_eval.ipynb's setup cells and its render(): prediction | composite, and the inklabel overlay and asf cue.
 
-VESUVIUS_CHECKPOINT=<cue_dropout checkpoint> VESUVIUS_OUT_DIR=<folder> python3 utils/render_trained_fragments.py
+VESUVIUS_CHECKPOINT=<HercUeNet checkpoint> VESUVIUS_OUT_DIR=<folder> python3 utils/render_trained_fragments.py
 """
 import json
 import os

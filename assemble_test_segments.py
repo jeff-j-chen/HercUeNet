@@ -31,7 +31,7 @@ usage:
   python assemble_test_segments.py [--workers N] [--out-dir DIR] [--include-extras]
 
 PHerc0846A
-  the 14 trained PHerc0846A sheets and the prize sheet PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi (the mix28 corpus, utils/mix6.py) are assembled by
+  the 14 trained PHerc0846A sheets and the prize sheet PRIZESHEET_11_11_flatboi_flatboi_abf (the mix28 corpus, utils/mix6.py) are assembled by
   assemble_training_segments.py (MESHES_0846A), which reuses render_fragment and make_flat_alias from here. the other
   PHerc0846A renders (REDO set, out_4/out_5, ...) stay in FRAGMENTS below.
 

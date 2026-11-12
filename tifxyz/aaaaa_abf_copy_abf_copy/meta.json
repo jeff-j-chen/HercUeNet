@@ -1,0 +1,30 @@
+{
+    "area_cm2": 14.009687800273307,
+    "area_vx2": 15984208.671551054,
+    "bbox": [
+        [
+            2202.31494140625,
+            3382.216064453125,
+            967.603759765625
+        ],
+        [
+            5629.9736328125,
+            4606.4521484375,
+            2239.335693359375
+        ]
+    ],
+    "date_last_modified": "20261110142410885",
+    "format": "tifxyz",
+    "name": "aaaaa_abf_copy_abf_copy",
+    "scale": [
+        0.05000000074505806,
+        0.05000000074505806
+    ],
+    "type": "seg",
+    "uuid": "aaaaa_abf_copy_abf_copy",
+    "vc_open_data_coordinate_space": "PHerc0846B/20250804142305@L0",
+    "vc_open_data_source_coordinate_level": 0,
+    "vc_open_data_source_coordinate_scale_factor": 1,
+    "vc_open_data_source_original_resolution": 9.362,
+    "vc_open_data_source_path": "https://vesuvius-challenge-open-data.s3.us-east-1.amazonaws.com/PHerc0846B/volumes/20250804142305-9.362um-1.2m-113keV-masked.zarr"
+}
