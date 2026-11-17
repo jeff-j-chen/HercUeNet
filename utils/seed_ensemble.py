@@ -1,4 +1,4 @@
-"""Seed-averaged ensemble on the prize sheet (utils/queue_ps4.sh step 4).
+"""Seed-averaged ensemble on the prize sheet (utils/queue_ps6.sh step 4).
 
 Per training seed (utils/mix6.py SEEDS, tags s1 / s2): HercUeNet epoch 3 and reader-v3 step 1000 predicted at the depth shifts -2, -1, 0 and
 reduced by the pixelwise max, v8-in epoch 3 at the shifts -2, -1 and reduced by the max (the selection of utils/mix6.py, the same as
@@ -7,7 +7,7 @@ ensemble_eval.ipynb as the three models of one ensemble (z-score / product compo
 
   python3 utils/seed_ensemble.py [--sheet <name>] [--seeds s1,s2] [--subdir <output/ensemble folder>]
 
-Every per-seed map is cached in output/ensemble/mix28_ps4_seedmaps/<sheet>/cache, so a rerun only computes what is missing or older than
+Every per-seed map is cached in output/ensemble/mix28_ps6_seedmaps/<sheet>/cache, so a rerun only computes what is missing or older than
 the render or its checkpoint.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-os.environ.setdefault("ENSEMBLE_SUBDIR", "mix28_ps4_seedmaps")  # per-seed maps; the notebook reads this at import
+os.environ.setdefault("ENSEMBLE_SUBDIR", "mix28_ps6_seedmaps")  # per-seed maps; the notebook reads this at import
 from utils import mix6  # noqa: E402
 
 CUE_EPOCH, READER_STEP, V8IN_EPOCH = 3, 1000, 3
@@ -43,8 +43,8 @@ def checkpoints(seed: str) -> dict:
 def load_notebook() -> dict:
     notebook = json.loads((REPO / "ensemble_eval.ipynb").read_text())
     namespace = {"__name__": "nb"}
-    for index in (1, 2, 3):
-        exec("".join(notebook["cells"][index]["source"]), namespace)
+    for cell in [c for c in notebook["cells"] if c["cell_type"] == "code"][:-2]:  # settings, helpers, runners, scoring (not the two figure cells)
+        exec("".join(cell["source"]), namespace)
     return namespace
 
 

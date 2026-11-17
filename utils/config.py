@@ -1004,7 +1004,7 @@ def apply_best_run(config) -> None:
 # (utils/holdout_exclusion.py). Half-brightness strokes of the 0846A labels (48..207, see utils/dataloader.split_extra_labels) are
 # hard negatives.
 # (The function keeps its mix6 name; mix6 was the 15-patch corpus before mix21 / mix25 / mix26.)
-MIX6_EPOCHS = 4
+MIX6_EPOCHS = max(CUE_SAVE_EPOCHS)
 MIX6_SAVE_EPOCHS = CUE_SAVE_EPOCHS  # epoch_1/2/3/4.pth (utils/mix6.py CUE_EPOCH_PATHS)
 MIX6_WARMUP_EPOCHS = 2
 MIX6_SEED = 17  # the split seed (coordinate hash) of every HercUeNet run

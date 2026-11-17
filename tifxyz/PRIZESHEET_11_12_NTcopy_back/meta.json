@@ -1,0 +1,166 @@
+{
+    "scale":  [
+                  0.05,
+                  0.05
+              ],
+    "bbox":  [
+                 [
+                     2018.14794921875,
+                     2496.524658203125,
+                     11903.3359375
+                 ],
+                 [
+                     6497.0283203125,
+                     4042.863037109375,
+                     13807.966796875
+                 ]
+             ],
+    "area_vx2":  9506000,
+    "area_cm2":  8.33172800264,
+    "format":  "tifxyz",
+    "type":  "seg",
+    "uuid":  "PRIZESHEET_11_12_NTcopy_back",
+    "source":  "C:\\Users\\ChenJeff\\.VC3D\\nt\\models\\copy_displacement_latest\\copy_displacement_latest.pth",
+    "checkpoint_path":  "C:\\Users\\ChenJeff\\.VC3D\\nt\\models\\copy_displacement_latest\\copy_displacement_latest.pth",
+    "compile_model":  false,
+    "compile_requested":  false,
+    "compile_mode":  "default",
+    "crop_size":  [
+                      128,
+                      256,
+                      256
+                  ],
+    "bbox_count":  632,
+    "bbox_overlap":  0.5,
+    "bbox_prune":  true,
+    "bbox_band_workers":  12,
+    "crop_input_workers":  1,
+    "triplet_output_channels":  6,
+    "retarget_factor":  1.0,
+    "tta_transform_effective":  "mirror",
+    "tta_merge_method_effective":  "vector_geomedian",
+    "n_pred_back_cells":  24209,
+    "n_pred_front_cells":  24209,
+    "orientation_mode":  "uv_handedness_chart_normal",
+    "orientation_global_normals_points":  24119,
+    "orientation_global_normal_zyx":  [
+                                          -0.10867159813642502,
+                                          0.9648855328559875,
+                                          0.23913699388504028
+                                      ],
+    "orientation_side_assignment_points":  58388,
+    "orientation_convention":  "front/back are assigned by signed displacement along normal = cross(col_tangent, row_tangent); names are arbitrary but chart-side consistent",
+    "triplet_direction_prior_mask_effective":  "cond",
+    "triplet_slot_to_output":  {
+                                   "A":  "dynamic",
+                                   "B":  "dynamic"
+                               },
+    "triplet_slot_assignment":  "per-point chart-side signed displacement",
+    "triplet_output_direction_prior_sign":  {
+                                                "front":  1,
+                                                "back":  -1
+                                            },
+    "dense_overlap_merge":  "center_distance_weighted_sparse_chunked_temporary_memmap",
+    "dense_overlap_merge_window_min_zyx":  [
+                                               11896,
+                                               2395,
+                                               2015
+                                           ],
+    "dense_overlap_merge_window_shape_zyx":  [
+                                                 1920,
+                                                 1812,
+                                                 4608
+                                             ],
+    "dense_overlap_merge_crop_count":  632,
+    "dense_overlap_merge_chunk_shape_zyx":  [
+                                                128,
+                                                128,
+                                                128
+                                            ],
+    "dense_overlap_merge_chunks":  0,
+    "dense_overlap_merge_sparse_bytes":  111975858176,
+    "dense_overlap_merge_temp_parent":  null,
+    "disp_sample_space":  "parameterized_row_col",
+    "disp_sample_radius":  1.0,
+    "disp_sample_spacing":  1.0,
+    "disp_sample_min_count":  1,
+    "disp_sample_reduce":  "mean",
+    "displacement_scale":  1.0,
+    "displacement_scale_source":  "default",
+    "save_coordinate_scale_factor":  1,
+    "stored_scale_rc":  [
+                            0.05000000074505806,
+                            0.05000000074505806
+                        ],
+    "effective_step_size_used":  20,
+    "front_projection":  {
+                             "mode":  "lattice_bilinear_torch",
+                             "stride_rc":  [
+                                               1,
+                                               1
+                                           ],
+                             "phase_rc":  [
+                                              0,
+                                              0
+                                          ],
+                             "n_full_valid":  24125,
+                             "n_anchor_sampled":  24209,
+                             "n_fallback_tried":  8759,
+                             "n_fallback_recovered":  0,
+                             "n_stored_valid":  24209
+                         },
+    "back_projection":  {
+                            "mode":  "lattice_bilinear_torch",
+                            "stride_rc":  [
+                                              1,
+                                              1
+                                          ],
+                            "phase_rc":  [
+                                             0,
+                                             0
+                                         ],
+                            "n_full_valid":  24125,
+                            "n_anchor_sampled":  24209,
+                            "n_fallback_tried":  8759,
+                            "n_fallback_recovered":  0,
+                            "n_stored_valid":  24209
+                        },
+    "iteration_index":  1,
+    "iterations_requested":  1,
+    "iter_direction":  null,
+    "keep_previous_wrap":  true,
+    "iterative_mode":  false,
+    "run_argv":  [
+                     "--tifxyz-path",
+                     "C:\\Users\\ChenJeff\\.VC3D\\remote_cache\\open_data\\segments\\PHerc0846A\\patches\\PRIZESHEET_11_12_pieces_aligned_v2_copy_flatboi_merged_copy_flatboi",
+                     "--volume-path",
+                     "C:\\Users\\ChenJeff\\.VC3D\\nt\\ct_0846A_0728",
+                     "--checkpoint-path",
+                     "C:\\Users\\ChenJeff\\.VC3D\\nt\\models\\copy_displacement_latest\\copy_displacement_latest.pth",
+                     "--volume-scale",
+                     "0",
+                     "--no-compile",
+                     "--batch-size",
+                     "1",
+                     "--tta-batch-size",
+                     "1",
+                     "--crop-size",
+                     "128",
+                     "256",
+                     "256",
+                     "--crop-input-workers",
+                     "1",
+                     "--tifxyz-voxel-size-um",
+                     "9.362",
+                     "--out-dir",
+                     "C:\\Users\\ChenJeff\\.VC3D\\nt\\out"
+                 ],
+    "surface_role":  "back",
+    "mesh_cleanup_enabled":  true,
+    "mesh_cleanup_target_step":  20.0,
+    "mesh_cleanup_duplicate_vertices_fixed":  75,
+    "mesh_cleanup_unique_edges":  47973,
+    "mesh_cleanup_relaxation_applied":  true,
+    "seed_surface_id":  "PRIZESHEET_11_12_NTcopy_back",
+    "name":  "PRIZESHEET_11_12_NTcopy_back"
+}

@@ -31,7 +31,7 @@ usage:
   python assemble_test_segments.py [--workers N] [--out-dir DIR] [--include-extras]
 
 PHerc0846A
-  the 14 trained PHerc0846A sheets and the prize sheet PRIZESHEET_11_11_flatboi_flatboi_abf (the mix28 corpus, utils/mix6.py) are assembled by
+  the 14 trained PHerc0846A sheets and the prize sheet PRIZESHEET_11_16 (the mix28 corpus, utils/mix6.py) are assembled by
   assemble_training_segments.py (MESHES_0846A), which reuses render_fragment and make_flat_alias from here. the other
   PHerc0846A renders (REDO set, out_4/out_5, ...) stay in FRAGMENTS below.
 
@@ -122,7 +122,6 @@ DEPTH_REVERSED = reversed_ids()
 # renders whose mesh is upside down in the flattened frame: the coordinate grids are rotated 180 degrees in-plane before
 # sampling (letters stay unmirrored; the normal and depth order are unchanged), so every stored array is upright
 ROTATE_180 = {"20261014084610", "20261012065814", "20261012065816", "20261012065818", "20261012065820", "20261012065822", "20261012065824", "20261012065826",
-              "fiber_only_20261102b_flatboi_PRIZESHEET",  # the 2026-11-02 prize sheet (now an evaluation render): rotated 180 like every straightened2 / fibre sheet
               *(f"fiber_only_20261029d_flatboi_{s}" for s in ("in_1", "in_2", "out_1", "out_2"))}
 # PHerc0846A quick patches whose mesh is turned in the flattened frame: counter-clockwise quarter turns that bring the scroll
 # axis (+z) up like the training sheets (measured from z.tif, 2026-10-28). Mirrored-looking and borderline patches are left alone.
@@ -546,7 +545,7 @@ FRAGMENTS = [
     ("20260928000007", "PHerc0813_z7104_w020_abf",
      f"{BUCKET}/PHerc0813/volumes/20250821151723-9.362um-1.2m-113keV-masked.zarr/0",
      "16993,7947,7947"),
-    # the 11 trained PHerc0846A sheets and the two prize sheets are assembled by assemble_training_segments.py
+    # the 11 trained PHerc0846A sheets and the prize sheet are assembled by assemble_training_segments.py
     # (MESHES_0846A); the PHerc0846A renders below are not part of the mix25 corpus.
     # PHerc0846A patches (2026-10-12); bboxes overlap 20260927134928, z reaches ~3% past the scan top.
     # the original 3_new/auto_grown_20261012065803387_abf sheet (20261012065803) is retired in favour of its

@@ -66,6 +66,7 @@ NEG_WEIGHT = mix6.READER_NEG_WEIGHT  # weight of the background pixels in the BC
 LOSS_FILE = VILLA / "ink-detection" / "koine_machines" / "training" / "loss" / "losses.py"
 NNUNET_LOSSES = VILLA / "vesuvius" / "src" / "vesuvius" / "models" / "training" / "loss" / "nnunet_losses.py"
 EXCLUSION = holdout_exclusion.READER_EXCLUSION_DIR
+NO_EXCLUSION = False  # corpus 0846a_prize trains on the prize sheet itself: no discard zones, and its own staged data folder
 # set from the command line: which corpus (utils/mix6.py corpus_segments) is trained and where it goes
 CORPUS, RUN_NAME = mix6.FINETUNE_CORPUS, mix6.READER_RUN
 # --init: start from this checkpoint instead of the released reader-v3.pth (the special prize-sheet fine-tune starts from a mix28 step)
@@ -92,8 +93,10 @@ def final_checkpoint(smoke: bool) -> Path:
 def batch_counts() -> dict:
     """samples per batch of each scroll of the (labelled part of the) corpus; the batch stays 13."""
     scrolls = list(dict.fromkeys(segment.scroll for segment in mix6.corpus_segments(CORPUS).values()))
-    if CORPUS in ("0846a", "prize"):
+    if CORPUS in ("0846a", "prize", "0846a_prize"):
         return {"0846A": BATCH}
+    if CORPUS == "0846a_487":  # the default 2 : 1 domain weight of 0846A and a donor
+        return {"0846A": 9, "0009B": BATCH - 9}
     counts = {scroll: BATCH_COUNTS[scroll] for scroll in scrolls}
     if CORPUS == "mix18":  # every donor scroll is one patch: 2 slots keep the study's 0846A 2 : donor 1 domain weight
         return {scroll: 4 if scroll == "0846A" else 2 for scroll in scrolls}
@@ -190,8 +193,8 @@ def _signature(alias: str) -> str:
     paths = [REPO / "masks" / f"{segment.render}.png", REPO / "dilated_inklabels" / f"{alias}.png"]
     if segment.split_masked:
         paths.append(REPO / "train_masks" / f"{alias}.png")
-    exclusion = holdout_exclusion.exclusion_path(alias, EXCLUSION)
-    if exclusion.is_file():
+    exclusion = None if NO_EXCLUSION else holdout_exclusion.exclusion_path(alias, EXCLUSION)
+    if exclusion is not None and exclusion.is_file():
         paths.append(exclusion)
     for path in paths:
         digest.update(path.read_bytes())
@@ -229,8 +232,8 @@ def prep() -> None:
         if segment.split_masked:
             split = cv2.imread(str(REPO / "train_masks" / f"{alias}.png"), cv2.IMREAD_GRAYSCALE)[:rows, :cols]
             mask = mask & ((split >= 240) | ((split >= 100) & (split <= 143))) & ~extra
-        discard = holdout_exclusion.load(alias, directory=EXCLUSION)
-        if discard is None and (int(alias) in mix6.SHEETS_0846A or CORPUS == "prize"):
+        discard = None if NO_EXCLUSION else holdout_exclusion.load(alias, directory=EXCLUSION)
+        if discard is None and not NO_EXCLUSION and (int(alias) in mix6.SHEETS_0846A or CORPUS == "prize"):
             raise SystemExit(f"[prep] {alias}: no exclusion in {EXCLUSION} (python3 -m utils.{'prize_finetune' if CORPUS == 'prize' else 'holdout_exclusion'})")
         if discard is not None:
             discard = discard[:rows, :cols]
@@ -338,7 +341,7 @@ def train(smoke: bool) -> Path:
 
 
 def main() -> None:
-    global CORPUS, STEPS, RUN_NAME, INIT, LEARNING_RATE, WARMUP_STEPS, SAVE_EVERY, EXCLUSION, SEED, NEG_WEIGHT
+    global CORPUS, STEPS, RUN_NAME, INIT, LEARNING_RATE, WARMUP_STEPS, SAVE_EVERY, EXCLUSION, SEED, NEG_WEIGHT, DATA, NO_EXCLUSION
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", default="all", choices=("all", "setup", "prep", "train"))
     parser.add_argument("--smoke", action="store_true", help="20 steps into runs/mix25_smoke")
@@ -365,6 +368,8 @@ def main() -> None:
     SAVE_EVERY = args.save_every or SAVE_EVERY
     if CORPUS == "prize":  # the prize sheet alone: its discard mask is the half-brightness region of its label
         EXCLUSION = prize_finetune.DIRS["reader_v3"]
+    if CORPUS == "0846a_prize":  # sheets of one scroll plus the prize sheet; staged apart so the shared mix28 staging keeps its zones
+        NO_EXCLUSION, DATA = True, READER / "data" / "0846a_prize"
     RUN_NAME = args.run_name or (mix6.READER_RUN if (CORPUS, STEPS) == (mix6.FINETUNE_CORPUS, mix6.READER_STEPS) else f"{CORPUS}_{STEPS}")
     os.chdir(REPO)
     final = None
@@ -373,7 +378,7 @@ def main() -> None:
     if args.command in ("all", "prep", "train"):
         # NOTHING trains on the prize sheet: the 18-voxel masks must exist for every trained 0846A sheet, computed against it
         # (the prize corpus is the prize sheet itself: its region mask must match its label instead)
-        problems = prize_finetune.problems("reader_v3") if CORPUS == "prize" else holdout_exclusion.problems("reader_v3")
+        problems = [] if NO_EXCLUSION else (prize_finetune.problems("reader_v3") if CORPUS == "prize" else holdout_exclusion.problems("reader_v3"))
         if problems:
             raise SystemExit("prize-sheet exclusion not ready (python3 -m utils."
                              + ("prize_finetune" if CORPUS == "prize" else "holdout_exclusion") + "):\n  " + "\n  ".join(problems[:10]))
