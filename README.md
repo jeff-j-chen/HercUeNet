@@ -47,6 +47,7 @@ their own environments (`reader-v3/.venv`, `nader-fork/.venv`) on first run. Run
 # PHerc0846A sheets and the prize sheet (their meshes come from the passphrase-protected archive: it prompts, see below), fetches the 14 donors (the PHerc0306B sheet from Hugging Face), and builds masks, norms, surface detections (PHerc1447: flat;
 # PHerc0846A: flat depth-13 aliases), the w013 .matched volume, surface anchors, the prize-sheet exclusions and 3 depths of asf cues.
 # --check only reports what is missing; python3 -m utils.mix6 prints the same state read-only.
+# NOTE: the 0846A fragments are encrypted. Decrypt with key: LuaZYY9dHUJZr8jhtpOyBxZFBuP0Yqah
 python3 assemble_training_segments.py --mix28
 
 # the three models, defaults only (each prints where its model is)
