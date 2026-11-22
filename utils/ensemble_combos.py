@@ -25,7 +25,7 @@ import numpy as np
 
 import nbformat  # noqa: E402
 
-SHEET = sys.argv[1] if len(sys.argv) > 1 else "PRIZESHEET_11_16"
+SHEET = sys.argv[1] if len(sys.argv) > 1 else "PRIZESHEET_11_19_flatboi"
 OUT = REPO / "output" / f"ensemble_combos_{SHEET}"
 OUT.mkdir(parents=True, exist_ok=True)
 

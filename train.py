@@ -4,7 +4,7 @@
 precomputed asf_morph map as a fourth input head (flat in 20% of the samples of 0846A, 0009B and 0172, always on the other scrolls), dual scale, strong nnPU and the text-region gate,
 on the mix28 corpus (12 PHerc0846A sheets + the labelled patches of PHerc0009B, 1447, 0841, 0172, 343 first letters, 0139, 1667, 0500P2
 and PHerc0306B; utils/mix6.py; a donor without ink or train mask is skipped), 4 epochs, seed 17. reader-v3 and v8-in train on the same corpus.
-The PRIZESHEET_11_11_flatboi_flatboi_abf prize sheet is rendered at the end and never trained on; the 0846A sheets lose their papyrus within
+The PRIZESHEET_11_19_flatboi prize sheet is rendered at the end and never trained on; the 0846A sheets lose their papyrus within
 12 voxels of it plus the model's context reach, and training refuses to start until those masks match the prize sheet.
 Checkpoints go to models/runs/<run>/ (final.pth, the last epoch, is the one ensemble_eval.ipynb reads)
 and TensorBoard to runs/<run>/; an existing run is never overwritten (a _2, _3 ... suffix is used).
@@ -4860,7 +4860,12 @@ class Trainer:
             self.scheduler._set_lr(self.c.tra.lr * min(start_epoch + 1, warmup) / warmup if warmup > 0 else self.c.tra.lr)
             print(f"[resume] starting at epoch {start_epoch + 1}/{self.c.tra.n_epochs} "
                   f"lr={self.optimizer.param_groups[0]['lr']:.3e} from {self.c.init_weights}", flush=True)
+        # VESUVIUS_STOP_AFTER_EPOCH=n: keep the n-epoch-schedule's learning rates but stop once epoch n is trained and saved
+        stop_after = int(os.environ.get("VESUVIUS_STOP_AFTER_EPOCH", 0) or 0)
         for epoch in range(start_epoch, self.c.tra.n_epochs):
+            if stop_after and epoch >= stop_after:
+                print(f"[stop] epoch {stop_after} done (VESUVIUS_STOP_AFTER_EPOCH); the {self.c.tra.n_epochs}-epoch schedule is not finished", flush=True)
+                break
             print(f"\n--- Epoch {epoch + 1}/{self.c.tra.n_epochs} ---")
             start_time = time.time()
 
@@ -5027,12 +5032,13 @@ def preflight_inputs(config, build_init: bool = False) -> None:
     if config.data.holdout_exclusion_dir:
         # every trained 0846A sheet must carry its discard mask, computed against the current prize sheet with the HercUeNet
         # radius and context reach, and a cue built without the prize-sheet zone; else it would train on the prize sheet
+        from utils import holdout_exclusion, mix6 as corpus
+
         missing_files += [
             path for path in (os.path.join(config.data.holdout_exclusion_dir, f"{sid}.png")
-                              for sid in train_ids if sid in MIX6_0846A)
+                              for sid in train_ids if sid in MIX6_0846A and sid not in corpus.NO_EXCLUSION_0846A)
             if not os.path.isfile(path)
         ]
-        from utils import holdout_exclusion, mix6 as corpus
 
         if os.path.abspath(config.data.holdout_exclusion_dir) == str(holdout_exclusion.EXCLUSION_DIR):
             stale_exclusion += holdout_exclusion.problems("cue_dropout")

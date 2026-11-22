@@ -1,8 +1,9 @@
-"""Fine-tune v8-in on the mix28 corpus (utils/mix6.py) for a 4-epoch schedule ($V8IN_EPOCHS overrides; utils/queue_ps4.sh runs it to the end; the ensemble uses epoch 3), from the released checkpoint.
-(mix28 = the corpus of all three trainings: the 14 PHerc0846A sheets + the labelled donor patches of PHerc0009B, 0343, 1447, 0841,
-0172, 0139, 1667, 0500P2 and PHerc0306B; a donor still without ink or train mask is skipped.
---corpus mix26 | mix25 | mix22 | mix18 | 0846a trains another corpus on the same staged data; --epochs and
---run-name change the run.)
+"""Fine-tune v8-in on the mix28x_new corpus (utils/mix6.py) from the released model: the learning-rate schedule of a 4-epoch run ($V8IN_EPOCHS overrides; cosine from 1e-5
+with 15% warm-up), stopped after the second epoch (--stop-epoch 2: trained-epoch0.ckpt and trained-epoch1.ckpt are saved; the ensembles use one each); background weight NEG_WEIGHT 10.
+--init <model> starts from another model.
+(mix28x_new = the 14 PHerc0846A sheets + the 2 hand-labelled 0846B sheets + the regenerated HerculeX x export of 2026-11-21 (253 sheets; utils/assemble_herculex2.py) +
+the labelled donor patches of PHerc0009B, 0343, 1447, 0841, 0172, 0139, 1667, 0500P2 and PHerc0306B; sampling groups: two halves of the hand-grown 0846A/B sheets, the x sheets,
+each donor scroll. --corpus mix28x (the first x export) | mix28 | mix26 | mix25 | mix22 | mix18 | 0846a trains another corpus on the same staged data; --epochs and --run-name change the run.)
 
 one command does everything and can be re-run (finished steps are skipped):
 
@@ -22,18 +23,19 @@ stage  writes what v8-in reads, per segment, under nader-fork/runs/v8in_mix25_da
        fiber_only_20261029d_flatboi prize sheet (holdout_exclusion_v8in/, utils/holdout_exclusion.py): no supervision there, and
        those pixels of the staged layers are zeroed (like the area outside the sheet). stage and train refuse to run until the
        masks were computed against the current prize sheet.
-train  the PH1447 recipe of nader-fork (finetune_v8in_with_local_segment.py) on the staged corpus: 4 epochs (cosine schedule), micro-batch 2 x accumulation 16 (= batch 4 x 8), NEG_WEIGHT 25,
+train  the PH1447 recipe of nader-fork (finetune_v8in_with_local_segment.py) on the staged corpus: 4 epochs (cosine schedule) stopped after --stop-epoch (utils/stop_at.py), micro-batch 2 x accumulation 16 (= batch 4 x 8), NEG_WEIGHT 10,
        group-balanced sampling (0846A split into two groups, so it weighs 2 against 1 for every other scroll). The last epoch
        also scores the stitched validation sheets. The final checkpoint is exported to a model folder.
 
-output: nader-fork/runs/v8in_mix28_4ep_ps4_<seed>/model/ (<seed> = s1 / s2, VESUVIUS_SEED_TAG or --seed; NEG_WEIGHT 20; model.safetensors + config.json, exported by a run that is not stopped early, printed at the end; ensemble_eval.ipynb and
-0846A_eval.ipynb read it through utils/mix6.MODEL_PATHS); the Lightning checkpoints
-(a trained-epoch<N>.ckpt after every epoch) are nader-fork/runs/v8in_mix28_4ep_ps4_<seed>/runs/*/checkpoints/ (the model used is epoch 3 = trained-epoch2.ckpt).
+output: nader-fork/runs/v8in_mix28x_new_4ep_ps7_<seed>/ (<seed> = s1 / s2, VESUVIUS_SEED_TAG or --seed); the Lightning checkpoints (a trained-epoch<N>.ckpt after every epoch) are
+nader-fork/runs/v8in_mix28x_new_4ep_ps7_<seed>/runs/*/checkpoints/ (the models used are epoch 1 = trained-epoch0.ckpt and epoch 2 = trained-epoch1.ckpt; ensemble_eval.ipynb and 0846A_eval.ipynb read it through
+utils/mix6.MODEL_PATHS, exporting it on first use).
 Needs the corpus data (python3 assemble_training_segments.py --mix28), git, git-lfs, uv and a GPU.
 """
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import shutil
@@ -95,6 +97,7 @@ if __name__ == "__main__" and sys.argv[1:2] == [TRAINER_FLAG]:
 sys.path.insert(0, str(REPO))
 from utils import holdout_exclusion, mix6, prize_finetune  # noqa: E402
 from utils.predict_models import venv_python  # noqa: E402
+from utils.stop_at import run_until  # noqa: E402
 
 FORK = Path(os.environ.get("NADER_FORK_DIR", REPO / "nader-fork"))
 FORK_URL, FORK_COMMIT = "https://github.com/jeff-j-chen/nader-fork.git", "8a811a86b751734223b3febff9adba24ecc549ad"
@@ -104,6 +107,7 @@ DATA = FORK / "runs" / "v8in_mix25_data" / "data"
 EXCLUSION = holdout_exclusion.V8IN_EXCLUSION_DIR
 EPOCHS = int(os.environ.get("V8IN_EPOCHS", mix6.V8IN_EPOCHS))
 DEPTH = 24
+STAGE_JOBS = int(os.environ.get("VES_STAGE_JOBS", 4))  # sheets staged in parallel
 NEG_WEIGHT = f"{mix6.V8IN_NEG_WEIGHT:g}"  # background weight of the BCE term, 25 before (utils/mix6.py)
 SEED = mix6.SEED["v8in"]  # utils/mix6.py SEEDS, VESUVIUS_SEED_TAG
 # the recipe's batch 4 x accumulation 8 needs more than 20 GB; same effective batch of 32 in micro-batches of this size
@@ -117,12 +121,16 @@ UV_ENV = dict(os.environ, UV_CACHE_DIR=os.environ.get("UV_CACHE_DIR", str(REPO /
 CORPUS, RUN_NAME = mix6.FINETUNE_CORPUS, mix6.V8IN_RUN  # set from the command line
 # --init / --lr: start from this model folder, safetensors or Lightning .ckpt instead of the released v8-in; learning-rate override
 INIT, LEARNING_RATE = None, None
+STOP_EPOCH = mix6.V8IN_STOP_EPOCHS  # the run is stopped after this epoch (of EPOCHS)
+LIMIT_BATCHES = None  # --limit-batches: batches per epoch, for testing the stop at --stop-epoch on a real run
+MIN_LR = WARMUP_PCT = None  # --min-lr / --warmup-pct: to continue a cosine schedule part-way (utils/v8in_epoch2.sh)
 
 
 def groups(corpus: dict) -> dict:
     sheets = [alias for alias, segment in corpus.items() if segment.scroll == "0846A"]
     mapping = {alias: f"PHerc{segment.scroll}" for alias, segment in corpus.items()}
     mapping.update({alias: "PHerc0846A_b" for alias in sheets[(len(sheets) + 1) // 2:]})
+    # mix28x: the hand-grown sheets are the two 0846A groups and the HerculeX ones (scroll 0846Ax) a third: 2 : 1 : 1 per donor scroll
     return mapping
 
 
@@ -194,7 +202,7 @@ def _layers(alias: str, destination: Path, discard) -> None:
         # the render is ~100k small chunk files on the network drive: read it once with the threaded reader of predict_models
         from utils.predict_models import read_volume
 
-        slab = np.clip(read_volume(source)[start:start + DEPTH], 0, 255).astype(np.uint8)
+        slab = np.clip(read_volume(source, start, start + DEPTH), 0, 255).astype(np.uint8)
         for index in missing:
             layer = slab[index]
             if discard is not None:
@@ -211,7 +219,8 @@ def stage() -> None:
 
     from utils.dataloader import split_extra_labels
 
-    for alias, segment in mix6.corpus_segments(CORPUS).items():
+    def stage_one(item):
+        alias, segment = item
         folder = DATA / alias
         mask = cv2.imread(str(REPO / "masks" / f"{segment.render}.png"), cv2.IMREAD_GRAYSCALE)
         label = cv2.imread(str(REPO / "dilated_inklabels" / f"{alias}.png"), cv2.IMREAD_GRAYSCALE)
@@ -247,6 +256,12 @@ def stage() -> None:
         cv2.imwrite(str(folder / f"{alias}_mask.png"), mask.astype(np.uint8) * 255)
         _layers(alias, folder / "layers", discard)
         print(f"[stage] {alias}: {mask.shape} ink={int(ink.sum())} mask={int(mask.sum())}", flush=True)
+
+    # the sheets are independent and their time is spent reading small zarr chunks from the network drive: stage several at once
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(STAGE_JOBS) as pool:
+        list(pool.map(stage_one, mix6.corpus_segments(CORPUS).items()))
 
 
 # ---- train ---------------------------------------------------------------------------------------------------------------
@@ -298,10 +313,21 @@ def recipe(smoke: bool) -> dict:
     training["valid_batch_size"] = min(int(training["valid_batch_size"]), 4)
     if LEARNING_RATE:
         training["lr"] = LEARNING_RATE
+    if MIN_LR is not None:
+        training["min_lr"] = MIN_LR
+    if WARMUP_PCT is not None:
+        training["cosine_warmup_pct"] = WARMUP_PCT
     training["seed"] = SEED
     # the stitched validation metrics crashed the last epoch on slivers of ink; they are diagnostics only
     training["eval_stitch_metrics"] = False
     return config
+
+
+def stop_checkpoint(smoke: bool) -> Path | None:
+    """the weights saved after the epoch the run stops at (--stop-epoch), trained-epoch<N-1>.ckpt."""
+    epoch = 0 if smoke else STOP_EPOCH - 1
+    candidates = sorted((run_dir(smoke) / "runs").glob(f"{run_dir(smoke).name}*/**/trained-epoch{epoch}.ckpt"))
+    return candidates[-1] if candidates else None
 
 
 def last_checkpoint(smoke: bool) -> Path | None:
@@ -320,7 +346,7 @@ def trained_checkpoint(smoke: bool) -> Path | None:
 
 
 def train(smoke: bool, resume: str | None = None) -> Path:
-    existing = last_checkpoint(smoke)
+    existing = last_checkpoint(smoke) if smoke else stop_checkpoint(smoke)
     if existing is not None:
         print(f"[train] {existing} exists already; delete {run_dir(smoke)} to train again", flush=True)
         return existing
@@ -341,15 +367,18 @@ def train(smoke: bool, resume: str | None = None) -> Path:
                "--devices", "1", "--accelerator", "gpu", "--precision", "16-mixed", "--run_name", run_dir(smoke).name]
     if resume:
         command += ["--resume_from_ckpt", resume]
-    if smoke:
-        command += ["--limit_train_batches", "6"]
+    if smoke or LIMIT_BATCHES:
+        command += ["--limit_train_batches", str(LIMIT_BATCHES or 6)]
     try:
-        run(command, cwd=entry.parent, env=env)
+        if smoke:
+            run(command, cwd=entry.parent, env=env)
+        else:  # the full schedule's learning rate, stopped once the checkpoint the ensemble uses is written
+            run_until(command, str(run_dir(smoke) / "runs" / "*" / "checkpoints" / f"trained-epoch{STOP_EPOCH - 1}.ckpt"), cwd=entry.parent, env=env)
     except subprocess.CalledProcessError:
         if trained_checkpoint(smoke) is None:
             raise
         print(f"[train] training finished but its last validation failed; using {trained_checkpoint(smoke)}", flush=True)
-    final = last_checkpoint(smoke) or trained_checkpoint(smoke)
+    final = (last_checkpoint(smoke) or trained_checkpoint(smoke)) if smoke else stop_checkpoint(smoke)
     if final is None:
         raise SystemExit(f"[train] finished without the final-epoch checkpoint under {run_dir(smoke) / 'runs'}")
     return final
@@ -364,7 +393,7 @@ def export(smoke: bool, checkpoint: Path) -> Path:
 
 
 def main() -> None:
-    global CORPUS, EPOCHS, RUN_NAME, INIT, LEARNING_RATE, EXCLUSION, SEED, NEG_WEIGHT
+    global CORPUS, EPOCHS, STOP_EPOCH, LIMIT_BATCHES, RUN_NAME, INIT, LEARNING_RATE, EXCLUSION, SEED, NEG_WEIGHT, MIN_LR, WARMUP_PCT
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", default="all", choices=("all", "setup", "stage", "train"))
     parser.add_argument("--smoke", action="store_true", help="one epoch of 6 batches into runs/v8in_mix25_smoke")
@@ -373,17 +402,24 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=EPOCHS, help="epochs (a trained-epoch<N>.ckpt is saved after each)")
     parser.add_argument("--run-name", default=None, help="folder under nader-fork/runs (default: v8in_mix28_4ep_ps4_<seed> for the default corpus and epochs, else v8in_<corpus>_<epochs>ep)")
     parser.add_argument("--dry-run", action="store_true", help="train: write the config and print what would train, then stop")
-    parser.add_argument("--init", default=None, help="train from this model folder / .safetensors / Lightning .ckpt instead of the released v8-in")
+    parser.add_argument("--init", default=None, help="train from this model folder / .safetensors / Lightning .ckpt (a glob is fine); default (or 'released') = the released v8-in")
+    parser.add_argument("--limit-batches", type=int, default=None, help="train only this many batches per epoch (tests the stop of a full run quickly)")
+    parser.add_argument("--stop-epoch", type=int, default=STOP_EPOCH, help="stop the run after this epoch of --epochs (the checkpoint the ensemble uses)")
     parser.add_argument("--lr", type=float, default=None, help="learning rate (the recipe's 1e-5 by default)")
+    parser.add_argument("--min-lr", type=float, default=None, help="end of the cosine schedule (recipe: 1e-6)")
+    parser.add_argument("--warmup-pct", type=float, default=None, help="share of the steps spent warming up (recipe: 0.15)")
     parser.add_argument("--seed", type=int, default=None, help=f"training seed (default {SEED}: utils/mix6.py SEEDS[VESUVIUS_SEED_TAG])")
     parser.add_argument("--neg-weight", type=float, default=None, help=f"background weight of the BCE term (default {NEG_WEIGHT})")
     args = parser.parse_args()
     SEED = args.seed if args.seed is not None else SEED
     NEG_WEIGHT = f"{args.neg_weight:g}" if args.neg_weight is not None else NEG_WEIGHT
     CORPUS, EPOCHS = args.corpus, args.epochs
-    INIT, LEARNING_RATE = args.init, args.lr
-    if INIT and not Path(INIT).exists():
-        raise SystemExit(f"--init {INIT} does not exist")
+    LEARNING_RATE, MIN_LR, WARMUP_PCT, STOP_EPOCH, LIMIT_BATCHES = args.lr, args.min_lr, args.warmup_pct, args.stop_epoch, args.limit_batches
+    if args.init and args.init != "released":
+        matches = sorted(glob.glob(args.init))
+        if not matches:
+            raise SystemExit(f"--init {args.init} does not exist")
+        INIT = matches[-1]
     if CORPUS == "prize":  # the prize sheet alone: its discard mask is the half-brightness region of its label
         EXCLUSION = prize_finetune.DIRS["v8in"]
     RUN_NAME = args.run_name or (mix6.V8IN_RUN if (CORPUS, EPOCHS) == (mix6.FINETUNE_CORPUS, mix6.V8IN_EPOCHS) else f"v8in_{CORPUS}_{EPOCHS}ep")

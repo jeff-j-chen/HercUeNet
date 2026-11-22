@@ -1,0 +1,29 @@
+{
+    "area_cm2": 9.38586557307966,
+    "area_vx2": 10708707.49854343,
+    "bbox": [
+        [
+            2398.373046875,
+            2517.169677734375,
+            11670.74609375
+        ],
+        [
+            6526.6904296875,
+            3934.53369140625,
+            13950.025390625
+        ]
+    ],
+    "date_last_modified": "20261119131603000",
+    "format": "tifxyz",
+    "max_gen": 27,
+    "scale": [
+        0.05000000074505806,
+        0.05000000074505806
+    ],
+    "seed_surface_id": "PRIZESHEET_11_19_flatboi",
+    "type": "seg",
+    "uuid": "PRIZESHEET_11_20",
+    "vc3d_segment_display_id": "PRIZESHEET_11_20",
+    "vc3d_segment_folder": "patches",
+    "vc3d_segment_folder_default_palette": true
+}

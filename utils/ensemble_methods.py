@@ -29,7 +29,7 @@ import cv2
 import nbformat
 import numpy as np
 
-SHEET = sys.argv[1] if len(sys.argv) > 1 else "PRIZESHEET_11_16"
+SHEET = sys.argv[1] if len(sys.argv) > 1 else "PRIZESHEET_11_19_flatboi"
 OUT = REPO / "output" / f"ensemble_methods_{SHEET}"
 OUT.mkdir(parents=True, exist_ok=True)
 

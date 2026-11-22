@@ -1,6 +1,6 @@
 """Tiled inference of the released Studio model (soft-loss EMA weights) on a uint8 [16, H, W] stack.
 
-Runs inside .venv-studio (torch, numpy, safetensors; built by stage_studio.py). The network and the tiling are those of
+Runs inside .venv-studio (torch, numpy, safetensors; built by finetune_studio.py setup). The network and the tiling are those of
 priyankaranke/vesuvius-studio-multiscroll-cpt (MIT), studio-multiscroll-cpt-20261023/hf/model.py and inference.py: 128 px windows, the
 central 96 px written, stride 64 with a Hann weight (the tiling of the PHerc0211 submission), input clip(raw, 0, 200) / 255.
 

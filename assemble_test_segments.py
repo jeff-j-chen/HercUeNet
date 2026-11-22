@@ -31,7 +31,7 @@ usage:
   python assemble_test_segments.py [--workers N] [--out-dir DIR] [--include-extras]
 
 PHerc0846A
-  the 14 trained PHerc0846A sheets and the prize sheet PRIZESHEET_11_16 (the mix28 corpus, utils/mix6.py) are assembled by
+  the 14 trained PHerc0846A sheets and the prize sheet PRIZESHEET_11_19_flatboi (the mix28 corpus, utils/mix6.py) are assembled by
   assemble_training_segments.py (MESHES_0846A), which reuses render_fragment and make_flat_alias from here. the other
   PHerc0846A renders (REDO set, out_4/out_5, ...) stay in FRAGMENTS below.
 
@@ -655,8 +655,9 @@ def make_flat_alias(src, dst, out_dir):
 
 def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script_dir,
                    chunk_depth, chunk_y, chunk_x, force=False, mask_dir=MASK_DIR,
-                   output_dtype="<u2", drop_cache=False):
-    """render one test fragment. returns (zid, status) for summary."""
+                   output_dtype="<u2", drop_cache=False, crop_valid=True):
+    """render one test fragment. returns (zid, status) for summary. crop_valid=False keeps the whole mesh grid (HerculeX sheets: their
+    labels cover the padded grid)."""
     mesh_dir = os.path.join(script_dir, "tifxyz", mesh_sub)
     out_zarr = os.path.join(out_dir, f"{zid}.zarr")
     mask_path = os.path.join(mask_dir, f"{zid}.png")
@@ -710,7 +711,7 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
             chunk_depth=chunk_depth,
             chunk_y=chunk_y,
             chunk_x=chunk_x,
-            crop_valid=True,
+            crop_valid=crop_valid,
             crop_margin=8,
             mask_dir=mask_dir,
             output_dtype=output_dtype,

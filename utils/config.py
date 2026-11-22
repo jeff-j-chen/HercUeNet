@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 
 import torch
 
-from .mix6 import CUE_SAVE_EPOCHS, CUE_DROPOUT_RUN as MIX6_RUN_NAME, CUE_DROPOUT_OTHER as MIX6_CUE_DROPOUT, cue_dropout_by_scroll as mix6_cue_dropout_by_scroll, trained_domains as mix6_trained_domains, HOLDOUT as MIX6_HOLDOUT, OUT_VIS as MIX6_OUT_VIS, CUE_TRAIN_0846A as MIX6_0846A
+from .mix6 import CUE_SAVE_EPOCHS, CUE_DROPOUT_RUN as MIX6_RUN_NAME, CUE_DROPOUT_OTHER as MIX6_CUE_DROPOUT, cue_dropout_by_scroll as mix6_cue_dropout_by_scroll, trained_domains as mix6_trained_domains, X_GROUP, HOLDOUT as MIX6_HOLDOUT, OUT_VIS as MIX6_OUT_VIS, CUE_TRAIN_0846A as MIX6_0846A
 
 # "INFO": print the full config, dataset building, and cache progress at the start of a run.
 # "ERROR": start-of-run output is silenced except lines containing ERROR (exceptions still raise).
@@ -999,12 +999,13 @@ def apply_best_run(config) -> None:
 # the best-run recipe (192 px field, dual scale, strong nnPU, text-region gate, asf_morph cue as a fourth input head) on the mix28 corpus
 # (utils/mix6.py: 14 trained 0846A sheets at domain weight 2 (incl. the 4 train-only fiber_only_20261029d_flatboi neighbours and the 3
 # sheets added on 2026-11-02) plus PHerc0009B, 1447, 0841, 0172, the 343 first letters, 0139, 1667 and 0500P2 at 1), with the cue
-# replaced by a flat map per domain (20% on 0846A, 0009B and 0172, always elsewhere: utils/mix6.py CUE_DROPOUT_BY_DOMAIN), the v6 ring parameters, seed 17 and 4 epochs. The prize sheet (PRIZESHEET_11_11_flatboi_flatboi_abf)
+# replaced by a flat map per domain (20% on 0846A, 0009B and 0172, always elsewhere: utils/mix6.py CUE_DROPOUT_BY_DOMAIN), the v6 ring parameters, seed 17 and 4 epochs. The prize sheet (PRIZESHEET_11_19_flatboi)
 # is rendered, never trained; the 0846A sheets lose their papyrus within 12 voxels of it plus the full context reach
 # (utils/holdout_exclusion.py). Half-brightness strokes of the 0846A labels (48..207, see utils/dataloader.split_extra_labels) are
 # hard negatives.
 # (The function keeps its mix6 name; mix6 was the 15-patch corpus before mix21 / mix25 / mix26.)
 MIX6_EPOCHS = max(CUE_SAVE_EPOCHS)
+MIX28X_EPOCH_DRAWS = 364_309  # draws of a mix28 epoch (logs_mix28/01_cue_dropout.log)
 MIX6_SAVE_EPOCHS = CUE_SAVE_EPOCHS  # epoch_1/2/3/4.pth (utils/mix6.py CUE_EPOCH_PATHS)
 MIX6_WARMUP_EPOCHS = 2
 MIX6_SEED = 17  # the split seed (coordinate hash) of every HercUeNet run
@@ -1046,11 +1047,19 @@ def apply_mix6_run(config) -> None:
     # patches outside the plain Config() split by their train_masks/ like every donor (the axis split is unused)
     data.scrolls = [scroll_by_id.get(scroll_id) or ScrollConfig(scroll_id, split_axis="x", train_split_frac=0.75)
                     for scroll_id in keep]
-    data.train_scroll_dict = {"pherc0846a": list(MIX6_0846A), **{name: list(ids) for name, ids in domains.items()}}
-    data.train_scroll_weights = [2, *([1] * len(domains))]
+    x_sheets = [sid for sid in MIX6_0846A if sid in X_GROUP]
+    if x_sheets:
+        # mix28x: the reliable hand-grown sheets and the HerculeX ones are two domains of weight 1 each (0846A keeps its 2 of 10)
+        hand = [sid for sid in MIX6_0846A if sid not in X_GROUP]
+        data.train_scroll_dict = {"pherc0846a": hand, "pherc0846a_x": x_sheets, **{name: list(ids) for name, ids in domains.items()}}
+        data.train_scroll_weights = [1, 1, *([1] * len(domains))]
+    else:
+        data.train_scroll_dict = {"pherc0846a": list(MIX6_0846A), **{name: list(ids) for name, ids in domains.items()}}
+        data.train_scroll_weights = [2, *([1] * len(domains))]
     data.train_only_scroll_ids = [scroll_id for scroll_id in data.train_only_scroll_ids if int(scroll_id) in keep]
-    data.equalize_domain = "pherc0846a"
-    # half-brightness strokes of the 0846A labels are hard negatives; the prize sheet / out_4 / out_5 are whole-patch validation only
+    data.equalize_domain = "" if x_sheets else "pherc0846a"
+    if x_sheets:
+        data.epoch_draws = MIX28X_EPOCH_DRAWS  # an epoch is as long as a mix28 one (the schedule and its run time stay comparable)    # half-brightness strokes of the 0846A labels are hard negatives; the prize sheet / out_4 / out_5 are whole-patch validation only
     data.extra_hard_negative_scroll_ids = list(MIX6_0846A)
     data.whole_patch_valid_scroll_ids = [MIX6_HOLDOUT, *MIX6_OUT_VIS]
     # the prize sheet has no label; the 0846A sheets lose their papyrus within 12 voxels of it, dilated by the model's context reach
