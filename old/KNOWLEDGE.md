@@ -2233,3 +2233,146 @@ Normalization is computed once per fragment over valid papyrus pixels only. `uti
 - normalized maximum
 
 The results are stored in `utils/norm_cache.json`, keyed by fragment ID. Chunk-aligned reads avoid repeatedly decompressing the same data. Missing entries can be computed on demand, but precomputing them is recommended.
+
+
+# README material moved here (2026-11-27)
+
+The root `README.md` was condensed to a jumpstart guide after winning the PHerc 0846A First Letters Prize. Everything below preserves the full technical reference previously kept in `README.md` on `submission-7-8`: the full `mix28` / `mix28x` / `mix28x_new` corpus tables and fragment notes, operational notes (encrypted archives, queues, disk quota, container RAM), retired `HercUeNet` (`train.py`) details, detailed notebook options, repository layout tables, PHerc 0175A assembly/orientation notes, and the 13 VC3D discovery test surfaces.
+
+## Setup details and historical notes (2026-11-21)
+
+- **Earlier runs and flags.** `--stop-step` / `--stop-epoch` move the stopping point, `--steps` / `--epochs` change the length of the schedule, `--init <checkpoint>` starts reader-v3 / v8-in from another model than the released one, `--corpus mix28x | mix28 | mix26 | mix25 | mix22 | mix18 | 0846a` selects earlier corpora (`MIX26_MODEL_PATHS`, `MIX25_MODEL_PATHS`, `MIX6_MODEL_PATHS` in `utils/mix6.py` name interim models). `VESUVIUS_V8IN_EPOCH=2` makes the notebooks read v8-in epoch 2 (default 1). Earlier models (`mix28x` first export, two-stage chains from `mix28`, one-stage runs) live under their own run names (`..._mix28x_ps7...`).
+- **Run tags and seeds.** The prize sheet is `PRIZESHEET_11_19_flatboi` (alias `20261119120000`, canonical since 2026-11-20, rendered upright). Runs are tagged by the prize sheet they were made against (`RUN_TAG` in `utils/mix6.py`): `_ps7` = `PRIZESHEET_11_19_flatboi`. Runs of earlier sheets (`_ps2` to `_ps6`) have different exclusion zones and are not clean on this prize sheet. Every run supports a second fixed seed (`s2`; `utils/mix6.py` `SEEDS`, `VESUVIUS_SEED_TAG=s2` or `--seed`), ending run names (`..._ps7_s1`, `..._ps7_s2`); `s1` uses each trainer's default seed.
+- **BCE negative weights.** Background (papyrus) pixels weigh less in the BCE term so predicting ink on papyrus is punished less: reader-v3 `0.8` (was `1.0`; `finetune_readerv3.py` patches `LabelSmoothedDCAndBCELoss` in its pinned checkout to accept `bce_kwargs.neg_weight`), v8-in `NEG_WEIGHT=10` (`25` in `_ps3`, `20` in `_ps6`; `mix6.V8IN_NEG_WEIGHT`, `mix6.READER_NEG_WEIGHT`), Studio `1.0` (`0.8` in its first fine-tune, replaced by soft nnPU `--pu-weight 0.5 --pu-prior 0.2` and `--jitter 40`).
+- **Encrypted PHerc0846A/B meshes.** The tifxyz meshes of every PHerc0846A sheet (the 14 trained sheets, the prize sheet, evaluation renders, HerculeX exports, and the two 0846B prize sheets) ship in `utils/tifxyz_0846A.tar.enc` (`openssl aes-256-cbc -pbkdf2 -iter 600000` over `tifxyz/<dir>` paths). When a render and mesh are missing, `assemble_training_segments.py`, `utils/assemble_herculex.py`, and `utils/assemble_herculex2.py` prompt for the passphrase (up to 3 prompts, or `TIFXYZ_PASSPHRASE` in the environment). `python3 -m utils.unlock_tifxyz_0846A [--dest DIR]` extracts manually; `python3 -m utils.seal_tifxyz --add tifxyz/<dir> ... --remove tifxyz/<dir>` re-seals from `TIFXYZ_PASSPHRASE` (`--verify` compares, `--list` inspects).
+- **Queues.**
+  - `utils/stage_mix28x_new.sh`: CPU/disk-only staging for all three trainers (`reader-v3/data/mix25`, `_ves_tmp/studio_data`, `nader-fork/runs/v8in_mix25_data`; folder names are historical and shared across corpora).
+  - `utils/queue_mix28x_new.sh`: sequential GPU queue on `mix28x_new` (reader-v3 -> Studio -> v8-in, visualizing checkpoints via `python3 -m utils.viz_checkpoints` and building ensembles for v8-in epochs 1 and 2 via `utils/ensemble_from_maps.py`; `utils/smoke_mix28x_new.sh` smoke-tests steps first).
+  - `utils/queue_mix28x.sh`: sequential GPU queue on `mix28x` (Studio -> reader-v3 -> v8-in + `viz_checkpoints`; logs in `logs_herculex/`).
+  - `utils/queue_ps6.sh` and `utils/queue_mix28_eval.sh`: earlier `mix28` queues kept for reference.
+- **Disk quota and container RAM.** Pod disk quotas count filesystem allocation units across small zarr chunks rather than `du` apparent bytes (`utils/stage_watchdog.sh` probes free space with multi-GB test writes; safe to prune old staged exports, experiment checkpoints, and `_ves_tmp` chunk caches). Container RAM is 62 GiB (not host `free` output); clear `/dev/shm/ves_zarr_cache` between runs and avoid running heavy jobs concurrently with training.
+- **Local-only sheets.** Unpublished sheets render via `python3 -m utils.render_sheet <name> B --reversed --secret` (`utils/depth_reversed_local.json`); `utils/local_eval_sheets.txt` lists extra evaluation sheets for the queue.
+
+## Mix28 base corpus table and HerculeX (`mix28x` / `mix28x_new`)
+
+`utils/mix6.py` defines all corpora. `mix28` = `mix26` (25 patches) + 3 fragments registered 2026-11-04 (`p9b_642`, `p9b_639`, `p306b_letters`):
+
+| Alias (label / cue / norm id) | Render (zarr / mask id) | Fragment | Physical scroll | Used by |
+|---|---|---|---|---|
+| `20260927134931` | `20260927134928` | ABF patch (`auto_grown_20260927134928530_abf`) | PHerc0846A | mix28 |
+| `20261012073246` | `20261012073244` | 073244 patch (`auto_grown_20261012073244544_abf`) | PHerc0846A | mix28 |
+| `20261012065813` | `20261012065812` | straight sheet -28 voxels (`..._straight_abf_m28`) | PHerc0846A | mix28 |
+| `20261012065817` | `20261012065816` | straightened2 in_1 | PHerc0846A | mix28 |
+| `20261012065819` | `20261012065818` | straightened2 out_1 | PHerc0846A | mix28 |
+| `20261012065821` | `20261012065820` | straightened2 out_2 | PHerc0846A | mix28 |
+| `20261012065823` | `20261012065822` | straightened2 out_3 | PHerc0846A | mix28 |
+| `20261029120001` | `fiber_only_20261029d_flatboi_in_1` | fibre sheet in_1 | PHerc0846A | mix28 |
+| `20261029120002` | `fiber_only_20261029d_flatboi_out_1` | fibre sheet out_1 | PHerc0846A | mix28 |
+| `20261029120003` | `fiber_only_20261029d_flatboi_in_2` | fibre sheet in_2 | PHerc0846A | mix28 |
+| `20261029120004` | `fiber_only_20261029d_flatboi_out_2` | fibre sheet out_2 | PHerc0846A | mix28 |
+| `20261029130001` | `fiber_only_abf2_20261029c_flatboi` | abf2 fibre-only sheet | PHerc0846A | mix28 |
+| `20261029130002` | `fiber_only_abf2_20261029c_flatboi_p28` | abf2 sheet moved +28 voxels along its normal | PHerc0846A | mix28 |
+| `20260921094415` | `20260921094413` | PHerc0846A test surface 6 (`auto_grown_20260921094413486_flatboi`, uint16 render) | PHerc0846A | mix28 |
+| `20250919125754` | same | patch 487 | PHerc0009B | mix28 |
+| `20260108000000` | same | w041 | PHerc0139 | mix28 |
+| `20260930144760` | same | w060 (flat surface, layer 15) | PHerc1447 | mix28 |
+| `20250825181859` | same | 500P2 -1 (`500P2_m1`) | PHerc0500P2 | mix28 |
+| `20250919132115` | same | patch 592 (`p9b_592`) | PHerc0009B | mix28 |
+| `20261007000000` | same | w047-w048 first letters (NOT 343P) | PHerc0343 | mix28 |
+| `20260221022814` | same | auto-grown 405 | PHerc0841 | mix28 |
+| `20260220213127` | same | w00 (`p841_w00`) | PHerc0841 | mix28 |
+| `20251112000002` | same | w087 | PHerc0172 | mix28 |
+| `20240304141531` | same (read as `20240304141531.matched`) | w013 (pooled 2.4µm fine scan) | PHerc1667 | mix28 |
+| `20250825181917` | same | 500P2 -2 (`500P2_m2`) | PHerc0500P2 | mix28 |
+| `20250919130642` | same | patch 642 (`p9b_642`, fractured sheet with holes in papyrus mask) | PHerc0009B | mix28 |
+| `20250510172639` | same | patch 639 (`p9b_639`) | PHerc0009B | mix28 |
+| `20261104000001` | same | first-letters sheet (`p306b_letters`, 41-layer claim-surface render of `Prodigle/pherc0306b-first-letters`) | PHerc0306B | mix28 |
+| `20261119120000` | `PRIZESHEET_11_19_flatboi` | **the prize sheet** (2026-11-19 sheet, canonical since 2026-11-20) | PHerc0846A | **held out, never trained or validated on** |
+
+- **PHerc0846A sheets & flat aliases.** Rendered from tifxyz meshes (`MESHES_0846A` in `assemble_training_segments.py`) and read through flat depth-13 aliases (`surface_labels/<alias>/` constant depth 13; `HercUeNet` `surface_window_offset = -1` reads slices 9–16; Studio reads slices 5–20; reader-v3 crops 21 layers around depth 13; v8-in reads central 24 layers). Fibre sheets render as uint8 extras with masks in `masks/extras/` symlinked into `masks/`. Four `fiber_only_20261029d` neighbours are rotated 180° (`ROTATE_180`); the prize sheet is already upright.
+- **Label conventions.** On PHerc0846A sheets, half-brightness strokes (`48..207`, `127 ± 80` in `split_extra_labels`) represent hard negatives in `HercUeNet` and supervised non-ink background in Studio / reader-v3 / v8-in (`>= 208` is ink). Donor scrolls train on `train_masks/<id>.png` only (`255` = train, `119`/`127` = hard negative, `0` = unused; half-brightness strokes unused). Unlabelled donors (`is_labelled == False`) are skipped automatically. `p306b_letters` is resampled from level-0 8.64 µm (`layer 20` surface) of `Prodigle/pherc0306b-first-letters`. Single-patch transfer study: `runs_corr/report/summary.md`.
+- **HerculeX first export (`mix28x`, `python3 -m utils.assemble_herculex`).** Adds 121 `HERCULEX_SHEETS` (`HerculeX_marks_export_0846A`: 54, `_0846B`: 47, `_0846B_blank`: 20; aliases `20261118010001..`, `20261118020001..`, `20261118040001..`) plus the 2 hand-labelled 0846B prize sheets `NEW_HAND_SHEETS` (`PRIZESHEET_B_11_18_abf_flatboi_flatboi`, `PRIZESHEET_B_2`, aliases `20261118030001/2`). Meshes whose normal points away from the scroll axis (`flipped_normals.txt`, plus `fiber_only_abf2_20261029c_flatboi`, `_p28`, test surface 6, and both `PRIZESHEET_B` sheets) are listed in `utils/depth_reversed.json` and rendered depth-reversed.
+- **Regenerated HerculeX export (`mix28x_new`, `python3 -m utils.assemble_herculex2`, default since 2026-11-21).** Replaces `HERCULEX_SHEETS` with 45 PHerc0846A and 214 PHerc0846B sheets (`tifxyz/new_x.zip` -> `tifxyz/HerculeX_labels_0846{A,B}/`), built under `hx2_<mesh>` zarr IDs and aliases `202611210100NN` / `202611210200NN` (`mix6.HERCULEX2_SHEETS`), shape-checked against `manifest.json`. The 45 A sheets are already cut >= 26 voxels from the prize sheet; 6 B sheets (`mix6.HERCULEX2_DROPPED`: `006, 055, 092, 098, 107, 130`) lie within 30 voxels of a held-out 0846B evaluation sheet and are excluded from training, leaving **253** trained X sheets.
+- **Sampling weights (`mix28x` / `mix28x_new`).** `HAND` (14 mix28 0846A + 2 hand 0846B = 16) : `X` (253 HerculeX sheets) : each labelled donor scroll = `4 : 2 : 1`. Studio samples groups with those probabilities (`finetune_studio.py` `select`); reader-v3 uses fixed batch quotas (`BATCH_COUNTS`: 4 + 2 + 1 per donor scroll); v8-in splits `HAND` into two groups of 8 vs `X` and one group per donor scroll (`2 : 1 : 1`).
+
+## Prize-sheet exclusion details
+
+`utils/holdout_exclusion.py` computes 3D mesh-point voxel distances from each trained PHerc0846A sheet to `PRIZESHEET_11_19_flatboi` (`python3 -m utils.holdout_exclusion [--force]` rebuilds masks; figures in `output/holdout_exclusion*/`):
+
+| Model | Discarded radius | Mask directory | Notes |
+|---|---|---|---|
+| Studio & reader-v3 | **18 voxels** | `holdout_exclusion_reader/` | Zeroed in staged volumes/planes; shared by both models |
+| v8-in | **25 voxels** | `holdout_exclusion_v8in/` | Zeroed in staged 24-layer TIFF stacks (6 `mix28x` sheets also lose a sliver) |
+| HercUeNet (retired) | **12 voxels + 148 px context dilation** | `holdout_exclusion/` (`zone/` for un-dilated 12 vx) | `148 px = (192 + 64)/2 + 20 jitter + 1`; `asf_morph` cues built excluding `zone/`; `CUE_DROPPED` (`20261012065817`, `20261012065819`) omitted because 0 ink remains |
+
+## Retired HercUeNet (`train.py`) & cross-validation (`k_folds.py`)
+
+`HercUeNet` (`train.py`, `apply_mix6_run` in `utils/config.py`) is retired and excluded from the winning ensemble, but kept in the repository for reference:
+
+- 3D nnU-Net, 192 px field (batch 32, AdamW `lr=1e-4`), dual scale (mix 0.5), strong nnPU (`pu_lambda=3`, 50% negatives >= 96 px from labels), text-region gate, ring close 2 / gap 2 / shell 4, 192 px native-noise bank, seed 17, 4 epochs (2 warmup), initialized from `models/init_mae192_cue4_seed17.pth` (`utils/cue_expand.py`).
+- Fourth gated input head alongside raw / LCN / dZ reading precomputed `asf_morph` maps (`cue_asf_morph/`, `_dm1`, `_dp1`) at 5× LR, with 20% flat-map cue dropout on `0846A`, `0009B`, `0172` and 100% flat map elsewhere (`CUE_DROPOUT_BY_DOMAIN`). Cues are ignored by `utils.mix6` unless `VESUVIUS_CUES=1`.
+- Checkpoints write to `models/runs/<run>/` and TensorBoard logs to `runs/<run>/`. `python3 k_folds.py` runs 3-fold letter CV and leave-patches-out arms of `iter2_asf_cue`.
+
+## Evaluation notebooks reference
+
+- **`ensemble_eval.ipynb`:** Runs Studio (step 500, `p1 -> 0`), reader-v3 (step 1000, `p1 -> 0`), and v8-in (epoch 1, `p50 -> 0`; all `p99.5 -> 1` over sheet mask, depth 0) on `PRIZESHEET_11_19_flatboi`, plus Studio base for visual reference (red label, not ensembled). Produces `ensemble_3x2.png` (Studio base | Studio FT / reader-v3 | v8-in / z-score composite | rank composite) and `zscore_product_ct_2x2.png` (z-score & product composites alongside 17-layer max-projection CT composite) under `output/ensemble/<ENSEMBLE_SUBDIR>/<sheet>/`, caching raw maps in `cache/`. Env overrides: `ENSEMBLE_{STUDIO,READER,V8IN}_CKPT`, `ENSEMBLE_*_DEPTHS`, `ENSEMBLE_SHEETS`, `ENSEMBLE_SUBDIR`, `VESUVIUS_V8IN_EPOCH=2`. `utils/ensemble_from_maps.py` builds the same figures directly from cached `.npy` maps without GPU inference.
+- **`0846A_eval.ipynb`:** Evaluates a single checkpoint (`CHECKPOINT` or `VESUVIUS_CHECKPOINT`, auto-detected by `utils/predict_models.detect_kind`; `VESUVIUS_OUT_DIR`, `VESUVIUS_V8IN_BATCH`) across the prize sheet, 14 trained 0846A sheets, donor patches, held-out patches (`out_4`, `out_5`, 3 quick patches), and remaining quick patches (`--skip '^quick_patch_outputs ='` skips the quick-patch sweep). Inklabel overlay colors on trained sheets: red = used by all 3, orange = dropped by HercUeNet, yellow = dropped by HercUeNet & v8-in, dark yellow = dropped by all 3.
+- **`eval_scrolls.ipynb` & `eval_test.ipynb`:** Legacy HercUeNet evaluation across labeled training fragments and the 13 test surfaces (`depth_ensemble = [low, high]`, `ensemble_method` in `utils/depth_ensemble.py`; outputs to `output/test_visualizations/<run_id>/`).
+- **Headless runner:** `python3 utils/run_notebook.py <notebook> [--keep-going] [--skip REGEX]` saves executed notebooks to `output/notebook_runs/`.
+
+## Repository layout reference
+
+| Path | Purpose |
+|---|---|
+| `utils/mix6.py` | Corpora (`mix28x_new`, `mix28x`, `mix28`, frozen older sets), `PRIZE_SHEET`, `MODEL_PATHS` / `default_models()`, readiness checks (`python3 -m utils.mix6 [--build]`) |
+| `utils/holdout_exclusion.py` | 3D prize-sheet exclusion masks for trained 0846A sheets and preflight verification |
+| `utils/unlock_tifxyz_0846A.py`, `utils/seal_tifxyz.py`, `utils/tifxyz_0846A.tar.enc` | Passphrase-protected archive of PHerc0846A/B meshes, extractor, and sealer |
+| `utils/assemble_herculex.py`, `utils/assemble_herculex2.py` | Assemblers for `NEW_HAND_SHEETS` + first HerculeX export (`mix28x`) and regenerated HerculeX export (`mix28x_new`) |
+| `utils/predict_studio.py`, `utils/predict_models.py`, `utils/ensemble_from_maps.py`, `utils/viz_checkpoints.py` | Isolated-venv inference for Studio, reader-v3, and v8-in; cached-map ensemble builder; per-checkpoint visualizer |
+| `utils/stop_at.py` | Early-stop wrapper preserving full-schedule learning rates |
+| `utils/config.py`, `utils/model.py`, `utils/dataloader.py`, `utils/training_utils.py`, `utils/visualizer.py`, `utils/surface.py` | Retired HercUeNet 3D nnU-Net config, architecture, ring/character sampling, losses, and surface targets |
+| `utils/norm.py`, `utils/precompute_norm.py`, `utils/generate_surface_supervision.py`, `utils/depth_reversed.json`, `utils/depth_flip.py` | Masked chunk-aligned normalization (`norm_cache.json`, `surface_anchor_cache.json`), surface maps, and depth-reversal handling |
+| `utils/precomputed_asf.py`, `utils/build_domain_cues.py` | Precomputed `asf_morph` cue maps (`cue_asf_morph*`) for retired HercUeNet |
+| `ves_zarrs2/`, `masks/`, `dilated_inklabels/`, `train_masks/`, `surface_labels/`, `tifxyz/` | 28-layer zarr volumes, papyrus footprints, ink/split masks, surface depth maps, and source meshes |
+| `models/`, `reader-v3/`, `villa-ink/`, `nader-fork/`, `.venv-studio/`, `output/`, `_ves_tmp/` | Model weights, cloned external trainer workspaces/venvs, rendered figures, and regenerable staging/scratch data |
+
+## PHerc0175A (2026-11-22)
+
+127 sheets of PHerc0175A are assembled and ensembled with the latest models (Studio fine-tune step 500, reader-v3 step 1000, v8-in epoch 1 of the mix28x runs, `output/ensemble/mix28x_ps7_s1_studio500_reader1000_v8in1/<sheet>/ensemble_3x2.png`). The sheets: the 25 quick patches of `tifxyz/quick_patches_from_D/PHerc0175A`, the registered test surface `auto_grown_20260918132724424_flatboi`, and the meshes of the four zips in `tifxyz/0175A/` (the 42 `neighbor_in_*` and 42 `neighbor_out_*` copies, patches 10-13 and 10-18; 129 mesh folders, 115 different ones: the same mesh is in several zips and in the quick patches, identical, 14 times).
+
+- `python3 -m utils.assemble_0175A unpack | audit | render | orient | register` (`utils/assemble_0175A.py`): `unpack` extracts every mesh once into `tifxyz/0175A_meshes/` (git-ignored), `render` makes the uint8 28-layer renders with `assemble_test_segments.render_fragment` (`ves_zarrs2/<name>.zarr`, `masks/extras/<name>.png`; about 2.5 Gpx, rendering is CPU-bound at roughly 2 Mpx/min), `orient` decides the direction of a rendered sheet, `register` writes the reversed ones into `utils/depth_reversed.json`. `python3 -m utils.pipeline_0175A` does direction + ensemble for every sheet as its render finishes (state in `logs_herculex/a0175/pipeline_state.json`).
+- **Normal direction (0846 rule does not hold for 0175A).** Unlike 0846A/B, 0175A sheets do not wind around a single axis (axis rule agreed on 3/12 clear sheets). Instead ink faces a nearly fixed direction `d = (0.62, -0.77, -0.14)`: `normal · d >= 0` renders plain, `< 0` reversed (agrees on 10/12 clear cases; 73 plain, 54 reversed).
+- **Model orientation test (`assemble_0175A.check`).** Runs released Studio on a 2000 px crop in both layer orders; pixel share `> 0.5` selects orientation when peak share `>= 8%` and ratio is outside `0.67..1.5`, overriding the geometric rule (`utils/orient_0175A.json`). `neighbor_in_*` / `neighbor_out_*` inherit their parent sheet's orientation (`utils/parents_0175A.json`), and reversed plain renders are flipped in place via `utils/depth_flip.py` (`depth_flipped=true`).
+
+## Test surfaces and flattened meshes
+
+The 13 VC3D-grown discovery test surfaces (`DEFAULT_TEST_SCROLL_IDS` in `utils/config.py`, `FRAGMENTS` in `assemble_test_segments.py` and `eval_test.ipynb`), rendered to 28 layers on the 9.362 µm grid:
+
+| # | ID | Physical scroll | Shape `(H,W)` | Mask coverage | Surface area | Scan | tifxyz mesh |
+|---|---|---|---:|---:|---:|---|---|
+| 1 | `20260814140748` | PHerc0813 | `(5081, 5701)` | 43.4% | 33.31 cm² | 9.362µm / 113keV | `auto_grown_20260814140748456_flatboi` |
+| 2 | `20260717193517` | PHerc0211 | `(7181, 6501)` | 70.5% | ~28.60 cm² | 9.362µm / 113keV | `auto_grown_20260717193517520_0_1_2_3_4_merged_flatboi` |
+| 3 | `20260720090842` | PHerc1203 | `(3421, 3821)` | 65.1% | 7.90 cm² | 9.362µm / 113keV | `auto_grown_20260720090842117_flatboi` |
+| 4 | `20250703034159` | PHerc1447 | `(7181, 9401)` | 70.0% | 51.27 cm² | 8.640µm / 116keV | `20250703034159_flatboi` |
+| 5 | `20260723112922` | PHerc0826 | `(5981, 3201)` | 60.0% | ~18.93 cm² | 9.362µm / 113keV | `auto_grown_20260723112922652_merged_flatboi` |
+| 6 | `20260921094413` | PHerc0846A | `(5021, 7721)` | 63.3% | 22.88 cm² | 9.362µm / 113keV | `auto_grown_20260921094413486_flatboi` |
+| 7 | `20260918132724` | PHerc0175A | `(4501, 5141)` | 61.0% | 11.95 cm² | 8.640µm / 116keV | `auto_grown_20260918132724424_flatboi` |
+| 8 | `20260922073234` | PHerc0306B | `(5121, 6181)` | 56.9% | 14.13 cm² | 8.640µm / 116keV | `auto_grown_20260922073234974_flatboi` |
+| 9 | `20260922161631` | PHerc0800 | `(6921, 8081)` | 55.9% | ~23.36 cm² | 8.640µm / 116keV | `auto_grown_20260922161631422_merged_flatboi` |
+| 10 | `20260925085345` | PHerc1447 | `(4901, 4621)` | 64.3% | 10.90 cm² | 8.640µm / 116keV | `auto_grown_20260925085345806_abf` |
+| 11 | `20260928000001` | PHerc0800 | `(2321, 4141)` | 77.4% | 5.50 cm² | 8.640µm / 116keV | `PHerc0800_z9264_w040_abf` |
+| 12 | `20260928000002` | PHerc0125 | `(1161, 3141)` | 77.3% | 2.50 cm² | 9.362µm / 113keV | `PHerc0125_z15344_w040_abf` |
+| 13 | `20260928000003` | PHerc0211 | `(1941, 3641)` | 53.5% | 26.229 cm² | 9.362µm / 113keV | `PHerc0211_z7312_w080_abf` |
+
+SLIM-flattening recipe (`_flatboi`, keep 1.5%, 50 iterations `symmetric_dirichlet`, tol `1e-5`):
+
+```bash
+vc_tifxyz2obj <seg> <seg>_coarse.obj --keep=1.5
+flatboi <seg>_coarse.obj 50 symmetric_dirichlet --tol=1e-05
+vc_tifxyz2obj <seg> <seg>_fine.obj
+vc_obj_uv_lift <seg>_coarse.obj <seg>_coarse_flatboi.obj <seg>_fine.obj <seg>_lifted.obj
+vc_obj2tifxyz <seg>_lifted.obj <seg>_flatboi --tifxyz-source=<seg>
+```
+
+Extra unlabeled sets (`python3 assemble_test_segments.py --include-extras [--upload-extras]`): `atlas` (R2 `atlas.zip`) and `quick_patches_from_D` (37 `PHerc0846A` and 25 `PHerc0175A` segments under `tifxyz/quick_patches_from_D/`).
+
