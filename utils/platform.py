@@ -72,7 +72,8 @@ def get_default_val_workers() -> int:
     if platform in ("windows", "linux-desktop"):
         return 0
     else:  # linux-runpod
-        return 4  # half of training workers; validation is sequential so fewer needed
+        # VES_VAL_WORKERS: each validation worker is another fork of a process that holds the whole preloaded chunk cache
+        return int(os.environ.get("VES_VAL_WORKERS", 4))
 
 
 def get_default_batch_size() -> int:

@@ -1,5 +1,5 @@
 """discard the parts of the trained PHerc0846A sheets near the prize sheet (utils/mix6.py HOLDOUT_NAME, now
-PRIZESHEET_11_11_flatboi_flatboi_abf; every earlier prize sheet is superseded).
+PRIZESHEET_11_19_flatboi; every earlier prize sheet is superseded).
 
 the neighbour sheets were traced next to the prize sheet and in places run onto it, so their renders and labels would leak
 it into training. For every trained 0846A sheet this measures, at each mesh point, the 3D distance to the prize-sheet mesh
@@ -78,6 +78,9 @@ def _mesh(name: str, factor: int):
     from assemble_test_segments import ROTATE_180, load_mesh
     from assemble_training_segments import MESHES_0846A
 
+    if name not in MESHES_0846A:  # a HerculeX 0846A sheet (utils/mix6.py): rendered over its whole mesh grid, never rotated
+        X, Y, Z, valid = load_mesh(str(REPO / "tifxyz" / hx_mesh(name)))
+        return dense_mesh(X, Y, Z, valid, factor)
     render, _alias, mesh = MESHES_0846A[name]
     X, Y, Z, valid = load_mesh(str(REPO / "tifxyz" / mesh))
     if render in ROTATE_180:
@@ -87,6 +90,11 @@ def _mesh(name: str, factor: int):
     y0, x0 = max(0, ys.min() - 8), max(0, xs.min() - 8)
     y1, x1 = min(valid.shape[0], ys.max() + 9), min(valid.shape[1], xs.max() + 9)
     X, Y, Z, valid = (grid[y0:y1, x0:x1] for grid in (X, Y, Z, valid))
+    return dense_mesh(X, Y, Z, valid, factor)
+
+
+def dense_mesh(X, Y, Z, valid, factor: int):
+    """bilinear dense points (H,W,3) of a tifxyz grid, valid (H,W) and the render shape of its uncropped grid."""
     gh, gw = X.shape
     shape = ((gh - 1) * GRID_PX + 1, (gw - 1) * GRID_PX + 1)
     height, width = (gh - 1) * factor + 1, (gw - 1) * factor + 1
@@ -105,6 +113,20 @@ def _mesh(name: str, factor: int):
     points = np.stack([up(X), up(Y), up(Z)], axis=-1)
     dense_valid = up(valid.astype(np.float32)) > 0.999
     return points, dense_valid, shape
+
+
+def hx_sheets() -> dict:
+    """the HerculeX 0846A sheets (alias -> (render, name)): the only extra sheets that can lie near the prize sheet (it is in the 0846A volume).
+    Their meshes were cut away from an earlier prize sheet; the new one may still come within a radius of a few of them."""
+    from utils import mix6
+
+    return {alias: value for alias, value in mix6.HERCULEX_SHEETS.items() if value[1].startswith("PHerc0846A")}
+
+
+def hx_mesh(name: str) -> str:
+    from utils import mix6
+
+    return mix6.herculex_mesh(next(alias for alias, value in mix6.HERCULEX_SHEETS.items() if value[1] == name))
 
 
 def dense_distance(name: str, holdout_tree) -> tuple[np.ndarray, tuple]:
@@ -164,7 +186,8 @@ def expected_aliases() -> list[int]:
 def trained_aliases(model: str) -> list[int]:
     from utils import mix6
 
-    return list(mix6.CUE_TRAIN_0846A if model == "cue_dropout" else mix6.TRAIN_0846A)
+    # the HerculeX sheets of corpus mix28x are cut away from the prize sheet already: no masks, never listed here
+    return list(mix6.CUE_TRAIN_BASE if model == "cue_dropout" else mix6.TRAIN_0846A)
 
 
 def _wanted(model: str) -> dict:
@@ -306,14 +329,16 @@ def build_all(force: bool = False, models=None, aliases=None) -> None:
         if context:
             CUE_ZONE_DIR.mkdir(parents=True, exist_ok=True)
     sheets = {alias: value for alias, value in mix6.SHEETS_0846A.items() if wanted is None or alias in wanted}
+    extra = {alias: value for alias, value in hx_sheets().items() if wanted is None or alias in wanted}
     print(f"[exclusion] prize sheet {mix6.HOLDOUT_NAME}; building {', '.join(todo)} for {len(sheets)} of {len(mix6.SHEETS_0846A)} trained sheets",
           flush=True)
     holdout_points, holdout_valid, _ = _mesh(mix6.HOLDOUT_NAME, HOLDOUT_DENSE)
     tree = cKDTree(holdout_points[holdout_valid])
     pixel_cm2 = (9.362e-4) ** 2
     summaries = {model: dict(previous.get(model, {})) for model in todo}
-    for alias, (render, name) in sheets.items():
+    for alias, (render, name) in {**sheets, **extra}.items():
         distance, shape = dense_distance(name, tree)
+        is_extra = alias in extra
         papyrus = _papyrus(render)
         if papyrus.shape != tuple(shape):
             raise ValueError(f"{name}: render mask {papyrus.shape} differs from the mesh frame {tuple(shape)}")
@@ -324,6 +349,10 @@ def build_all(force: bool = False, models=None, aliases=None) -> None:
             radius, context, directory, figure_dir = specs()[model]
             near = zone(distance, shape, radius)
             excluded = dilate_square(near, context)
+            if is_extra and not (excluded & papyrus).any():  # a HerculeX sheet out of reach keeps no mask file at all
+                for stale in (exclusion_path(alias, directory), exclusion_path(alias, CUE_ZONE_DIR)):
+                    stale.unlink(missing_ok=True)
+                continue
             cv2.imwrite(str(exclusion_path(alias, directory)), (excluded & papyrus).astype(np.uint8) * 255)
             if context:
                 cv2.imwrite(str(exclusion_path(alias, CUE_ZONE_DIR)), (near & papyrus).astype(np.uint8) * 255)
@@ -339,13 +368,14 @@ def build_all(force: bool = False, models=None, aliases=None) -> None:
             row["discarded_fraction"] = row["discarded_cm2"] / max(row["papyrus_cm2"], 1e-9)
             row["discarded_ink_fraction"] = row["discarded_ink_cm2"] / max(row["ink_cm2"], 1e-9)
             summaries[model][str(alias)] = row
-            _figure(alias, name, render, distance_px, excluded, papyrus, ink, row, radius, figure_dir, context)
+            if not is_extra:
+                _figure(alias, name, render, distance_px, excluded, papyrus, ink, row, radius, figure_dir, context)
             print(f"[exclusion] {model} {alias} {name}: zone {row['zone_cm2']:.2f}, discard {row['discarded_cm2']:.2f}/"
                   f"{row['papyrus_cm2']:.2f} cm2 ({100 * row['discarded_fraction']:.0f}%), ink {row['discarded_ink_cm2']:.3f}/"
                   f"{row['ink_cm2']:.3f} cm2, min distance {row['min_distance_vox']:.1f} vox", flush=True)
     for model in todo:
         radius, context, directory, figure_dir = specs()[model]
-        _overview(summaries[model], radius, figure_dir, mix6.HOLDOUT_NAME, context)
+        _overview({a: r for a, r in summaries[model].items() if int(a) not in mix6.HERCULEX_SHEETS}, radius, figure_dir, mix6.HOLDOUT_NAME, context)
         (Path(directory) / "summary.json").write_text(json.dumps({**_wanted(model), "sheets": summaries[model]}, indent=1))
         print(f"[exclusion] {model}: masks in {directory}, figures in {figure_dir}")
 

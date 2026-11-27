@@ -8,6 +8,12 @@ Base directory: only `README.md`, `train.py`, `finetune_v8in.py`, `finetune_read
 caches are in `utils/` (`norm_cache.json`, `surface_anchor_cache.json`, `depth_reversed.json`, `precompute_norm.py`, `generate_surface_supervision.py`,
 `build_domain_cues.py`, `run_notebook.py`, `queue_mix28.sh`, `queue_mix28_eval.sh`), unused scripts in `old/`. Call helper scripts as modules: `python3 -m utils.<name>`.
 
+## 2026-11-20: mix28x, the new prize sheet, the sealed meshes (read the README section "HerculeX marks export and the 2026-11-20 setup")
+
+`VESUVIUS_CORPUS=mix28x`, prize sheet `PRIZESHEET_11_19_flatboi` (tag `_ps7`), HercUeNet retired. The queue is `utils/queue_mix28x.sh` (Studio, reader-v3, v8-in, each followed by
+`python3 -m utils.viz_checkpoints <studio|reader|v8in>`); meshes of the x sheets, the prize sheet and the 0846B prize sheets are sealed in `utils/tifxyz_0846A.tar.enc`
+(`python3 -m utils.seal_tifxyz`); never run a second heavy job next to a training (62 GiB container RAM).
+
 ## Corpora and the prize sheet
 
 - **mix28** (`utils/mix6.py` `CORPUS` and `FINETUNE_CORPUS`: HercUeNet, reader-v3 and v8-in all train on it; HercUeNet omits `CUE_DROPPED` = straightened2 abf in / out_1,
@@ -18,9 +24,8 @@ caches are in `utils/` (`norm_cache.json`, `surface_anchor_cache.json`, `depth_r
   `is_labelled`, `corpus_segments`, `trained_domains`); it trains as soon as its labels are drawn (255 trains, 119 hard negative, black unused).
 - **mix26** (frozen; `--corpus mix26` of the fine-tunes): the 25 patches before 2026-11-04. The interim models (HercUeNet `cue_dropout_labelsv6_mix26/epoch_2.pth`, reader-v3 / v8-in on the 18-patch
   **mix18**) are `MIX26_MODEL_PATHS`; the evaluation notebooks default to them until the mix28 trainings have run.
-- The PRIZE sheet is `PRIZESHEET_11_11_flatboi_flatboi_abf` (alias 20261112120000, the 2026-11-11 sheet made canonical on 2026-11-12, rendered upright). It is the only prize sheet: every earlier one
-  (the 2026-11-09 sheet `PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi`, `fiber_only_20261102b_flatboi_PRIZESHEET`, `PRIZESHEET_NEW`) is superseded and kept only as an evaluation render. NOTHING trains or validates on it.
-  `RUN_TAG` in `utils/mix6.py` (`_ps4`) names the runs made against it; `_ps3` runs were made against the 2026-11-09 sheet, `_ps2` runs against `PRIZESHEET_NEW`, untagged ones against the 2026-11-02 sheet. Every `_ps4` model is trained twice (seed tags `s1`, `s2`, `VESUVIUS_SEED_TAG`), which ends the run name; the notebooks default to `s1`: HercUeNet epoch 3, reader-v3 step 1000, v8-in epoch 3.
+- The PRIZE sheet is `PRIZESHEET_11_19_flatboi` (alias 20261119120000, the 2026-11-19 sheet made canonical on 2026-11-20, rendered upright). It is the only prize sheet: every earlier one is superseded and gone. NOTHING trains or validates on it.
+  `RUN_TAG` in `utils/mix6.py` (`_ps6`) names the current runs; every `_ps6` model is trained twice (seed tags `s1`, `s2`, `VESUVIUS_SEED_TAG`), which ends the run name; the notebooks default to `s1`: HercUeNet epoch 3, reader-v3 step 1000, v8-in epoch 3.
 
 ## Prize-sheet exclusion (must be ready before any training)
 
@@ -102,7 +107,7 @@ to `nader-fork/runs/v8in_mix25_data/data` (also a historical name; layers are re
 ```bash
 reader-v3/.venv/bin/python - <<'EOF'      # hecate needs an unnormalised uint8 (Z, Y, X) array
 import numpy as np, zarr
-a = np.asarray(zarr.open("ves_zarrs2/PRIZESHEET_11_11_flatboi_flatboi_abf.zarr", mode="r")[:])
+a = np.asarray(zarr.open("ves_zarrs2/PRIZESHEET_11_19_flatboi.zarr", mode="r")[:])
 np.save("_ves_tmp/render_u8.npy", np.clip(a, 0, 255).astype(np.uint8))
 EOF
 TMPDIR=/vesuvius/_ves_tmp reader-v3/.venv/bin/python hecate/hecate.py --checkpoint hecate/hecate_9.6um.pth \

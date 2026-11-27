@@ -1,0 +1,27 @@
+{
+  "alias": 20261112120000,
+  "papyrus_cm2": 9.037,
+  "ink_px": 649536,
+  "region_px": 0,
+  "version": 1,
+  "label_sha1": "0b646281d7640a0b354839d1e6554822118790b7",
+  "margin_px": 4,
+  "context_px": 149,
+  "models": {
+    "cue_dropout": {
+      "discarded_cm2": 0.0,
+      "discarded_fraction": 0.0,
+      "ink_kept_px": 649536
+    },
+    "reader_v3": {
+      "discarded_cm2": 0.0,
+      "discarded_fraction": 0.0,
+      "ink_kept_px": 649536
+    },
+    "v8in": {
+      "discarded_cm2": 0.0,
+      "discarded_fraction": 0.0,
+      "ink_kept_px": 649536
+    }
+  }
+}

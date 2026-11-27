@@ -1,0 +1,449 @@
+{
+ "description": "Reader V3: Reader v2 continued on 256 px tiles (30k it), then on 384 px tiles (20k it, this config), batch 10, same data + labels.",
+ "mode": "flat",
+ "model_type": "vesuvius_unet_3d_stem_2d",
+ "model_config": {
+  "autoconfigure": true,
+  "basic_encoder_block": "BasicBlockD",
+  "basic_decoder_block": "ConvBlock",
+  "stem_channels": 16,
+  "z_projection_mode": "none",
+  "features_per_stage": [
+   32,
+   64,
+   128,
+   256,
+   320,
+   320
+  ],
+  "n_blocks_per_stage": [
+   1,
+   3,
+   4,
+   6,
+   6,
+   6
+  ],
+  "n_conv_per_stage_decoder": [
+   1,
+   1,
+   1,
+   1,
+   1
+  ],
+  "strides": [
+   [
+    1,
+    1
+   ],
+   [
+    2,
+    2
+   ],
+   [
+    2,
+    2
+   ],
+   [
+    2,
+    2
+   ],
+   [
+    2,
+    2
+   ],
+   [
+    2,
+    2
+   ]
+  ],
+  "pool_op_kernel_sizes": [
+   [
+    1,
+    1
+   ],
+   [
+    2,
+    2
+   ],
+   [
+    2,
+    2
+   ],
+   [
+    2,
+    2
+   ],
+   [
+    2,
+    2
+   ],
+   [
+    2,
+    2
+   ]
+  ]
+ },
+ "targets": {
+  "ink": {
+   "activation": "none",
+   "out_channels": 1,
+   "z_projection_mode": "none"
+  }
+ },
+ "in_channels": 1,
+ "patch_size": [
+  17,
+  384,
+  384
+ ],
+ "patch_overlap": 0.25,
+ "patch_min_labeled_coverage": 0.0,
+ "flat_z_window_jitter": {
+  "enabled": true,
+  "window_depth": 17,
+  "max_offset": 2,
+  "probability": 1.0,
+  "padding": "forbidden"
+ },
+ "image_normalization": {
+  "mode": "robust_mad",
+  "percentile_lower": 1.0,
+  "percentile_upper": 99.0
+ },
+ "augmentation_preset": "default",
+ "augmentation_rotation_axes": [
+  0
+ ],
+ "loss": {
+  "terms": [
+   {
+    "name": "LabelSmoothedDCAndBCELoss",
+    "metric_name": "base",
+    "weight": 1.0,
+    "weight_dice": 0.25,
+    "weight_ce": 1.0,
+    "dice_label_smoothing": 0.0,
+    "bce_label_smoothing": 0.5,
+    "bce_kwargs": {
+     "neg_weight": 0.8
+    }
+   }
+  ]
+ },
+ "optimizer": "sgd",
+ "learning_rate": 0.003,
+ "weight_decay": 3e-05,
+ "scheduler": {
+  "name": "diffusers_cosine_warmup"
+ },
+ "warmup_steps": 200,
+ "grad_clip": 1.0,
+ "mixed_precision": "fp16",
+ "batch_size": 13,
+ "num_iterations": 6000,
+ "seed": 42,
+ "sampling_strategy": "fixed_scroll_prior_stratified",
+ "fixed_scroll_prior": {
+  "seed": 42,
+  "target_batch_counts": {
+   "0846A": 4,
+   "0343": 1,
+   "0009B": 1,
+   "1447": 1,
+   "0841": 1,
+   "0172": 1,
+   "0139": 1,
+   "1667": 1,
+   "0500P2": 1,
+   "0306B": 1
+  }
+ },
+ "sampling_audit_every": 200,
+ "best_checkpoint_metric": "val_balanced_accuracy",
+ "save_every": 1000,
+ "val_every": 1000000000,
+ "val_steps": 32,
+ "val_preview_batches": 1,
+ "log_every": 50,
+ "dataloader_workers": 6,
+ "pin_memory": true,
+ "verify_finite_gradients_steps": 0,
+ "max_amp_overflow_events": 0,
+ "out_dir": "/vesuvius/reader-v3/runs/mix28_ps5_s1",
+ "datasets": [
+  {
+   "segments_path": "/vesuvius/reader-v3/data/mix25/labels",
+   "segments": [
+    "20260927134931",
+    "20261012073246",
+    "20261012065813",
+    "20261012065817",
+    "20261012065819",
+    "20261012065821",
+    "20261012065823",
+    "20261029120001",
+    "20261029120002",
+    "20261029120003",
+    "20261029120004",
+    "20261029130001",
+    "20261029130002",
+    "20260921094415"
+   ],
+   "surface_volume_paths": {
+    "20260927134931": "/vesuvius/reader-v3/data/mix25/volumes/20260927134931.zarr",
+    "20261012073246": "/vesuvius/reader-v3/data/mix25/volumes/20261012073246.zarr",
+    "20261012065813": "/vesuvius/reader-v3/data/mix25/volumes/20261012065813.zarr",
+    "20261012065817": "/vesuvius/reader-v3/data/mix25/volumes/20261012065817.zarr",
+    "20261012065819": "/vesuvius/reader-v3/data/mix25/volumes/20261012065819.zarr",
+    "20261012065821": "/vesuvius/reader-v3/data/mix25/volumes/20261012065821.zarr",
+    "20261012065823": "/vesuvius/reader-v3/data/mix25/volumes/20261012065823.zarr",
+    "20261029120001": "/vesuvius/reader-v3/data/mix25/volumes/20261029120001.zarr",
+    "20261029120002": "/vesuvius/reader-v3/data/mix25/volumes/20261029120002.zarr",
+    "20261029120003": "/vesuvius/reader-v3/data/mix25/volumes/20261029120003.zarr",
+    "20261029120004": "/vesuvius/reader-v3/data/mix25/volumes/20261029120004.zarr",
+    "20261029130001": "/vesuvius/reader-v3/data/mix25/volumes/20261029130001.zarr",
+    "20261029130002": "/vesuvius/reader-v3/data/mix25/volumes/20261029130002.zarr",
+    "20260921094415": "/vesuvius/reader-v3/data/mix25/volumes/20260921094415.zarr"
+   },
+   "volume_scale": 0,
+   "source_family": "native_9p36_0846A",
+   "sampling_scroll": "0846A",
+   "sampling_physical_segment_keys": {
+    "20260927134931": "0846A:20260927134931",
+    "20261012073246": "0846A:20261012073246",
+    "20261012065813": "0846A:20261012065813",
+    "20261012065817": "0846A:20261012065817",
+    "20261012065819": "0846A:20261012065819",
+    "20261012065821": "0846A:20261012065821",
+    "20261012065823": "0846A:20261012065823",
+    "20261029120001": "0846A:20261029120001",
+    "20261029120002": "0846A:20261029120002",
+    "20261029120003": "0846A:20261029120003",
+    "20261029120004": "0846A:20261029120004",
+    "20261029130001": "0846A:20261029130001",
+    "20261029130002": "0846A:20261029130002",
+    "20260921094415": "0846A:20260921094415"
+   },
+   "sampling_representation_keys": {
+    "20260927134931": "native_9p36_0846A:20260927134931",
+    "20261012073246": "native_9p36_0846A:20261012073246",
+    "20261012065813": "native_9p36_0846A:20261012065813",
+    "20261012065817": "native_9p36_0846A:20261012065817",
+    "20261012065819": "native_9p36_0846A:20261012065819",
+    "20261012065821": "native_9p36_0846A:20261012065821",
+    "20261012065823": "native_9p36_0846A:20261012065823",
+    "20261029120001": "native_9p36_0846A:20261029120001",
+    "20261029120002": "native_9p36_0846A:20261029120002",
+    "20261029120003": "native_9p36_0846A:20261029120003",
+    "20261029120004": "native_9p36_0846A:20261029120004",
+    "20261029130001": "native_9p36_0846A:20261029130001",
+    "20261029130002": "native_9p36_0846A:20261029130002",
+    "20260921094415": "native_9p36_0846A:20260921094415"
+   }
+  },
+  {
+   "segments_path": "/vesuvius/reader-v3/data/mix25/labels",
+   "segments": [
+    "20261007000000"
+   ],
+   "surface_volume_paths": {
+    "20261007000000": "/vesuvius/reader-v3/data/mix25/volumes/20261007000000.zarr"
+   },
+   "volume_scale": 0,
+   "source_family": "native_9p36_0343",
+   "sampling_scroll": "0343",
+   "sampling_physical_segment_keys": {
+    "20261007000000": "0343:20261007000000"
+   },
+   "sampling_representation_keys": {
+    "20261007000000": "native_9p36_0343:20261007000000"
+   }
+  },
+  {
+   "segments_path": "/vesuvius/reader-v3/data/mix25/labels",
+   "segments": [
+    "20250919125754",
+    "20250919132115",
+    "20250919130642",
+    "20250510172639"
+   ],
+   "surface_volume_paths": {
+    "20250919125754": "/vesuvius/reader-v3/data/mix25/volumes/20250919125754.zarr",
+    "20250919132115": "/vesuvius/reader-v3/data/mix25/volumes/20250919132115.zarr",
+    "20250919130642": "/vesuvius/reader-v3/data/mix25/volumes/20250919130642.zarr",
+    "20250510172639": "/vesuvius/reader-v3/data/mix25/volumes/20250510172639.zarr"
+   },
+   "volume_scale": 0,
+   "source_family": "native_9p36_0009B",
+   "sampling_scroll": "0009B",
+   "sampling_physical_segment_keys": {
+    "20250919125754": "0009B:20250919125754",
+    "20250919132115": "0009B:20250919132115",
+    "20250919130642": "0009B:20250919130642",
+    "20250510172639": "0009B:20250510172639"
+   },
+   "sampling_representation_keys": {
+    "20250919125754": "native_9p36_0009B:20250919125754",
+    "20250919132115": "native_9p36_0009B:20250919132115",
+    "20250919130642": "native_9p36_0009B:20250919130642",
+    "20250510172639": "native_9p36_0009B:20250510172639"
+   }
+  },
+  {
+   "segments_path": "/vesuvius/reader-v3/data/mix25/labels",
+   "segments": [
+    "20260930144760"
+   ],
+   "surface_volume_paths": {
+    "20260930144760": "/vesuvius/reader-v3/data/mix25/volumes/20260930144760.zarr"
+   },
+   "volume_scale": 0,
+   "source_family": "native_9p36_1447",
+   "sampling_scroll": "1447",
+   "sampling_physical_segment_keys": {
+    "20260930144760": "1447:20260930144760"
+   },
+   "sampling_representation_keys": {
+    "20260930144760": "native_9p36_1447:20260930144760"
+   }
+  },
+  {
+   "segments_path": "/vesuvius/reader-v3/data/mix25/labels",
+   "segments": [
+    "20260221022814",
+    "20260220213127"
+   ],
+   "surface_volume_paths": {
+    "20260221022814": "/vesuvius/reader-v3/data/mix25/volumes/20260221022814.zarr",
+    "20260220213127": "/vesuvius/reader-v3/data/mix25/volumes/20260220213127.zarr"
+   },
+   "volume_scale": 0,
+   "source_family": "native_9p36_0841",
+   "sampling_scroll": "0841",
+   "sampling_physical_segment_keys": {
+    "20260221022814": "0841:20260221022814",
+    "20260220213127": "0841:20260220213127"
+   },
+   "sampling_representation_keys": {
+    "20260221022814": "native_9p36_0841:20260221022814",
+    "20260220213127": "native_9p36_0841:20260220213127"
+   }
+  },
+  {
+   "segments_path": "/vesuvius/reader-v3/data/mix25/labels",
+   "segments": [
+    "20251112000002"
+   ],
+   "surface_volume_paths": {
+    "20251112000002": "/vesuvius/reader-v3/data/mix25/volumes/20251112000002.zarr"
+   },
+   "volume_scale": 0,
+   "source_family": "native_9p36_0172",
+   "sampling_scroll": "0172",
+   "sampling_physical_segment_keys": {
+    "20251112000002": "0172:20251112000002"
+   },
+   "sampling_representation_keys": {
+    "20251112000002": "native_9p36_0172:20251112000002"
+   }
+  },
+  {
+   "segments_path": "/vesuvius/reader-v3/data/mix25/labels",
+   "segments": [
+    "20260108000000"
+   ],
+   "surface_volume_paths": {
+    "20260108000000": "/vesuvius/reader-v3/data/mix25/volumes/20260108000000.zarr"
+   },
+   "volume_scale": 0,
+   "source_family": "native_9p36_0139",
+   "sampling_scroll": "0139",
+   "sampling_physical_segment_keys": {
+    "20260108000000": "0139:20260108000000"
+   },
+   "sampling_representation_keys": {
+    "20260108000000": "native_9p36_0139:20260108000000"
+   }
+  },
+  {
+   "segments_path": "/vesuvius/reader-v3/data/mix25/labels",
+   "segments": [
+    "20240304141531"
+   ],
+   "surface_volume_paths": {
+    "20240304141531": "/vesuvius/reader-v3/data/mix25/volumes/20240304141531.zarr"
+   },
+   "volume_scale": 0,
+   "source_family": "native_9p36_1667",
+   "sampling_scroll": "1667",
+   "sampling_physical_segment_keys": {
+    "20240304141531": "1667:20240304141531"
+   },
+   "sampling_representation_keys": {
+    "20240304141531": "native_9p36_1667:20240304141531"
+   }
+  },
+  {
+   "segments_path": "/vesuvius/reader-v3/data/mix25/labels",
+   "segments": [
+    "20250825181859",
+    "20250825181917"
+   ],
+   "surface_volume_paths": {
+    "20250825181859": "/vesuvius/reader-v3/data/mix25/volumes/20250825181859.zarr",
+    "20250825181917": "/vesuvius/reader-v3/data/mix25/volumes/20250825181917.zarr"
+   },
+   "volume_scale": 0,
+   "source_family": "native_9p36_0500P2",
+   "sampling_scroll": "0500P2",
+   "sampling_physical_segment_keys": {
+    "20250825181859": "0500P2:20250825181859",
+    "20250825181917": "0500P2:20250825181917"
+   },
+   "sampling_representation_keys": {
+    "20250825181859": "native_9p36_0500P2:20250825181859",
+    "20250825181917": "native_9p36_0500P2:20250825181917"
+   }
+  },
+  {
+   "segments_path": "/vesuvius/reader-v3/data/mix25/labels",
+   "segments": [
+    "20261104000001"
+   ],
+   "surface_volume_paths": {
+    "20261104000001": "/vesuvius/reader-v3/data/mix25/volumes/20261104000001.zarr"
+   },
+   "volume_scale": 0,
+   "source_family": "native_9p36_0306B",
+   "sampling_scroll": "0306B",
+   "sampling_physical_segment_keys": {
+    "20261104000001": "0306B:20261104000001"
+   },
+   "sampling_representation_keys": {
+    "20261104000001": "native_9p36_0306B:20261104000001"
+   }
+  }
+ ],
+ "checkpoint": "/vesuvius/reader-v3/reader-v3.pth",
+ "weights_only": true,
+ "patch_cache_filename": "/vesuvius/reader-v3/data/mix25/patches_384x384_7297254f61.json",
+ "ema": {
+  "enabled": false,
+  "decay": 0.999,
+  "start_step": 0,
+  "update_every_steps": 1,
+  "validate": false,
+  "save_in_checkpoint": false
+ },
+ "volume_auth_json": null,
+ "crop_size": [
+  17,
+  384,
+  384
+ ],
+ "stitch_factor": 1,
+ "use_stitched_forward": false,
+ "stitched_gradient_checkpointing": true,
+ "grad_acc_steps": 1
+}

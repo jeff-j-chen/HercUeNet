@@ -29,11 +29,9 @@ patch-correlation study (runs_corr/report/summary.md).
 Every trained 0846A sheet loses its papyrus near the prize sheet (utils/holdout_exclusion.py: HercUeNet 12 vx + its context
 reach, reader-v3 18 vx, v8-in 25 vx); the trainings refuse to start until those masks were computed against HOLDOUT_NAME.
 
-The prize sheet is PRIZESHEET_11_11_flatboi_flatboi_abf
-(alias 20261112120000, the 2026-11-11 sheet made canonical on 2026-11-12, rendered upright, never trained or validated on) and the only prize
-sheet that is assembled: every earlier one (straightened2, fiber_only_20261029d_flatboi, the 20261030 / 20261102b renderings,
-fiber_only_20261102b_flatboi_PRIZESHEET, PRIZESHEET_NEW of 2026-11-06 and PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi of 2026-11-09, alias 20261109120000)
-is superseded and stays on disk as an evaluation render.
+The prize sheet is PRIZESHEET_11_19_flatboi
+(alias 20261119120000, the 2026-11-19 sheet made canonical on 2026-11-20, rendered upright, never trained or validated on) and the only prize
+sheet: every earlier one is superseded and gone from the repository (its mesh was removed from utils/tifxyz_0846A.tar.enc).
 `assemble_training_segments.py --mix28` sets up exactly mix28's 28 registered patches + this sheet = 29.
 
 `python3 -m utils.mix6` prints the state of every artifact the three trainings read (read-only);
@@ -75,26 +73,76 @@ SHEETS_0846A = {
 }
 MIX26_NEW_SHEETS = (20261029130001, 20261029130002, 20260921094415)
 TRAIN_0846A = tuple(SHEETS_0846A)
+
+# HerculeX marks export (2026-11-18): 54 PHerc0846A patches (tifxyz/HerculeX_marks_export_0846A) and 17 patches of the physically split
+# other half of the scroll (PHerc0846B, tifxyz/HerculeX_marks_export_0846B, read from the 0846B volume). Their meshes are already cut away
+# from the prize sheet, so they have no exclusion masks (utils/holdout_exclusion.py never sees them); their zarrs are uint8 extras-style
+# renders (zarr id = mesh name, mask in masks/extras linked into masks/) read through flat depth-13 aliases like every 0846A sheet.
+# Meshes in flipped_normals.txt are in utils/depth_reversed.json. `python3 -m utils.assemble_herculex` builds everything.
+# The corpus mix28x = mix28 + these 101 sheets (VESUVIUS_CORPUS=mix28x; the default mix28 and the frozen corpora do not change).
+HERCULEX_EXPORTS = {"A": ("HerculeX_marks_export_0846A", "PHerc0846A_marks_", 20261118010000, (*range(1, 38), *range(39, 56))),
+                    "B": ("HerculeX_marks_export_0846B", "PHerc0846B_partial_", 20261118020000, tuple(range(1, 48))),
+                    "C": ("HerculeX_marks_export_0846B_blank", "PHerc0846B_blank_", 20261118040000, tuple(range(1, 21)))}
+# The two hand-labelled 0846B prize sheets (labels added 2026-11-19) train with the hand-grown sheets of mix28: two groups of 0846A / 0846B sheets,
+# HAND (the 14 mix28 sheets + these 2, reliable) and X (the 100+ HerculeX sheets, less reliable), are sampled half and half by every training.
+NEW_HAND_SHEETS = {20261118030001: ("PRIZESHEET_B_11_18_abf_flatboi_flatboi",) * 2, 20261118030002: ("PRIZESHEET_B_2",) * 2}
+HERCULEX_SHEETS = {base + number: (f"{prefix}{number:03d}", f"{prefix}{number:03d}")
+                   for _folder, prefix, base, numbers in HERCULEX_EXPORTS.values() for number in numbers}
+
+
+def export_key(name: str) -> str:
+    """HERCULEX_EXPORTS key of a sheet name: A (0846A marks), B (0846B partials) or C (0846B blank)."""
+    return "A" if name.startswith("PHerc0846A") else "C" if name.startswith("PHerc0846B_blank") else "B"
+
+
+def herculex_mesh(alias) -> str:
+    """mesh folder under tifxyz/ of a HerculeX sheet."""
+    name = HERCULEX_SHEETS[int(alias)][0]
+    folder = HERCULEX_EXPORTS[export_key(name)][0]
+    return f"{folder}/tifxyz/{name}"
+
+
+# The regenerated x export of 2026-11-21 (tifxyz/new_x.zip -> tifxyz/HerculeX_labels_0846{A,B}/{tifxyz,inklabels,manifest.json,flipped_normals.txt}): 45 PHerc0846A and
+# 214 PHerc0846B sheets that replace the HERCULEX_SHEETS above in the corpus mix28x_new. Built by utils/assemble_herculex2.py under NEW names (zarr id hx2_<name>, aliases
+# 202611210100NN / 202611210200NN), so the old x sheets, which an older training may still read, stay untouched.
+HERCULEX2_EXPORTS = {"A": ("HerculeX_labels_0846A", "PHerc0846A_marks_", 20261121010000, tuple(n for n in range(1, 48) if n not in (21, 35))),
+                     "B": ("HerculeX_labels_0846B", "PHerc0846B_marks_", 20261121020000, tuple(range(1, 215)))}
+HERCULEX2_SHEETS = {base + number: (f"hx2_{prefix}{number:03d}", f"{prefix}{number:03d}")
+                    for _folder, prefix, base, numbers in HERCULEX2_EXPORTS.values() for number in numbers}
+# not trained on: these meshes lie within 30 voxels of a held-out evaluation sheet of the 0846B volume (one of them is the sheet it was grown from); the A sheets of the export
+# are already cut at least 26 voxels away from the prize sheet. Their renders and labels are still built.
+HERCULEX2_DROPPED = tuple(f"PHerc0846B_marks_{n:03d}" for n in (6, 55, 92, 98, 107, 130))
+HERCULEX2_TRAIN = {alias: value for alias, value in HERCULEX2_SHEETS.items() if value[1] not in HERCULEX2_DROPPED}
+
+
+def herculex2_sheets() -> dict:
+    """{alias: (render zarr id, mesh name)} of every sheet of the regenerated x export (the trained ones are HERCULEX2_TRAIN)."""
+    return dict(HERCULEX2_SHEETS)
+
+
+def herculex2_mesh(alias) -> str:
+    """mesh folder under tifxyz/ of a sheet of the regenerated x export."""
+    name = HERCULEX2_SHEETS[int(alias)][1]
+    folder = HERCULEX2_EXPORTS["A" if name.startswith("PHerc0846A") else "B"][0]
+    return f"{folder}/tifxyz/{name}"
+
+
+SHEETS_0846A_ALL = {**SHEETS_0846A, **NEW_HAND_SHEETS, **HERCULEX_SHEETS, **HERCULEX2_SHEETS}
+HAND_0846A = (*SHEETS_0846A, *NEW_HAND_SHEETS)
+NO_EXCLUSION_0846A = {*HERCULEX_SHEETS, *HERCULEX2_SHEETS, *NEW_HAND_SHEETS}  # no prize-sheet exclusion masks (cut away already, or trained on)
 # straightened2 abf in / out_1 lie on the prize sheet: the 12 vx + context exclusion of HercUeNet leaves them no ink (the fine-tunes
 # keep 1-24%), so the HercUeNet corpus omits them
 CUE_DROPPED = (20261012065817, 20261012065819)
-CUE_TRAIN_0846A = tuple(alias for alias in TRAIN_0846A if alias not in CUE_DROPPED)
+CUE_TRAIN_BASE = tuple(alias for alias in TRAIN_0846A if alias not in CUE_DROPPED)
 # HercUeNet only: the asf cue is replaced by the flat map (128 over the papyrus) in this share of the samples of each domain. It is
 # useful on 0846A, 0009B and 0172 (20%); on every other scroll it is always flat (100%), also in validation, so the cue head only learns
 # from the domains it helps on
-CUE_DROPOUT_BY_DOMAIN = {"pherc0846a": 0.2, "pherc0009b": 0.2, "pherc0172": 0.2}
+CUE_DROPOUT_BY_DOMAIN = {"pherc0846a": 0.2, "pherc0846a_x": 0.2, "pherc0009b": 0.2, "pherc0172": 0.2}
 CUE_DROPOUT_OTHER = 1.0
-# the prize sheet (the only one assembled): rendered and predicted, never trained or validated on. It is the 2026-11-11 sheet
-# PRIZESHEET_11_11_flatboi_flatboi_abf, canonical since 2026-11-12; it supersedes PRIZESHEET_NEW_flatboi_flatboi_flatboi_flatboi_copy_flatboi (alias 20261109120000, the
-# 2026-11-09 remake of PRIZESHEET_NEW), PRIZESHEET_NEW (alias 20261106120000, PS2_*) and the 2026-11-02 sheet
-# fiber_only_20261102b_flatboi_PRIZESHEET (OLD_PRIZE_SHEET, alias 20261102120000); they stay on disk for comparison. Its mesh grid is
-# upright like PRIZESHEET_NEW's, so it is not in ROTATE_180
-OLD_PRIZE_SHEET = "fiber_only_20261102b_flatboi_PRIZESHEET"
-OLD_HOLDOUT = 20261102120000
-PS2_PRIZE_SHEET = "PRIZESHEET_NEW"
-PS2_HOLDOUT = 20261106120000
-PRIZE_SHEET = "PRIZESHEET_11_11_flatboi_flatboi_abf"
-HOLDOUT = 20261112120000
+# the prize sheet (the only one): rendered and predicted, never trained or validated on. It is the 2026-11-19 sheet PRIZESHEET_11_19_flatboi, canonical
+# since 2026-11-20; it supersedes every earlier prize sheet. Its mesh grid is upright, so it is not in ROTATE_180
+PRIZE_SHEET = "PRIZESHEET_11_19_flatboi"
+HOLDOUT = 20261119120000
 HOLDOUT_RENDER = PRIZE_SHEET
 HOLDOUT_NAME = PRIZE_SHEET
 FIBER_RENDERS = (PRIZE_SHEET, *(f"{FIBER_NEIGHBOUR_BASE}_{suffix}" for suffix in FIBER_NEIGHBOURS.values()))
@@ -132,6 +180,10 @@ class Segment(NamedTuple):  # keyed by the alias: the label / cue / norm name
 # every segment any corpus ever trained on, in the fine-tune corpus order of reader-v3 and v8-in (the staged data covers all of them)
 ALL_SEGMENTS = {
     **{str(alias): Segment(str(render), "0846A", FLAT_DEPTH_0846A, False, name) for alias, (render, name) in SHEETS_0846A.items()},
+    **{str(alias): Segment(render, "0846A", FLAT_DEPTH_0846A, False, name) for alias, (render, name) in NEW_HAND_SHEETS.items()},
+    # the X group is its own sampling scroll ("0846Ax"): reader-v3 / v8-in sample it as a unit, half of 0846A
+    **{str(alias): Segment(render, "0846Ax", FLAT_DEPTH_0846A, False, name) for alias, (render, name) in HERCULEX_SHEETS.items()},
+    **{str(alias): Segment(render, "0846Ax", FLAT_DEPTH_0846A, False, name) for alias, (render, name) in HERCULEX2_SHEETS.items()},
     "20261007000000": Segment("20261007000000", "0343", 15, True, "p343_letters"),
     "20250919125754": Segment("20250919125754", "0009B", 15, True, "p9b_487"),
     "20250919132115": Segment("20250919132115", "0009B", 15, True, "p9b_592"),
@@ -173,16 +225,24 @@ SEGMENTS = {alias: segment for alias, segment in ALL_SEGMENTS.items() if alias i
 #   0846a  the 11 sheets of mix25 only
 #   mix18  the reader-v3 / v8-in default: the 14 mix26 sheets + 4 donors (0009B 487, 0139 w041, 1447 w060, 0500P2 -1)
 #   prize  the prize sheet alone (the special fine-tune of utils/prize_finetune.py; reader-v3 and v8-in only, HercUeNet has its own entry)
-CORPORA = ("mix28", "mix26", "mix25", "mix22", "mix18", "0846a", "prize")
-CORPUS = "mix28"  # train.py (HercUeNet)
-FINETUNE_CORPUS = "mix28"  # finetune_readerv3.py and finetune_v8in.py: the same corpus as train.py
+CORPORA = ("mix28", "mix28x", "mix28x_new", "mix26", "mix25", "mix22", "mix18", "0846a", "prize", "0846a_prize", "0846a_487")
+# VESUVIUS_CORPUS=0846a_487 trains all three models on the 14 PHerc0846A sheets + PHerc0009B patch 487 only (the run names carry the corpus)
+CORPUS = os.environ.get("VESUVIUS_CORPUS", "mix28x_new")  # mix28x_new: mix28 + the 2 hand 0846B sheets + the regenerated x export (mix28x = the same with the first x export)
+FINETUNE_CORPUS = CORPUS  # finetune_studio.py, finetune_readerv3.py and finetune_v8in.py
+# the 0846A sheets HercUeNet trains on / every training reads: the exclusion-managed mix28 ones, plus the HerculeX sheets in mix28x
+X_SHEETS = HERCULEX_SHEETS if CORPUS == "mix28x" else HERCULEX2_TRAIN if CORPUS == "mix28x_new" else {}  # the x group of the corpus
+CUE_TRAIN_0846A = (*CUE_TRAIN_BASE, *NEW_HAND_SHEETS, *X_SHEETS) if X_SHEETS else CUE_TRAIN_BASE
+TRAIN_0846A_CORPUS = (*TRAIN_0846A, *NEW_HAND_SHEETS, *X_SHEETS) if X_SHEETS else TRAIN_0846A
+# mix28x samples the 0846A sheets in two groups of equal weight: HAND (reliable) and X (the HerculeX sheets)
+X_GROUP = tuple(X_SHEETS)
 MIX18_DONORS = ("20250919125754", "20260108000000", "20260930144760", "20250825181859")
 MIX22_DROPPED = ("20260422000000", "20260226000000", "20250925222237")
 
 
 def _frozen(segments: dict[str, Segment]) -> dict[str, Segment]:
     """the segments of the older corpora: without the mix28 additions."""
-    return {alias: segment for alias, segment in segments.items() if alias not in MIX28_NEW}
+    return {alias: segment for alias, segment in segments.items()
+            if alias not in MIX28_NEW and int(alias) not in HERCULEX_SHEETS and int(alias) not in HERCULEX2_SHEETS and int(alias) not in NEW_HAND_SHEETS}
 
 
 @functools.lru_cache(maxsize=None)
@@ -217,6 +277,8 @@ def unlabelled_ids() -> list[int]:
 def trained_domains() -> dict[str, list[int]]:
     """DOMAINS of the labelled donor patches (a domain left without any is dropped): what train.py trains on after the 0846A sheets."""
     domains = {name: [sid for sid in ids if is_labelled(sid)] for name, ids in DOMAINS.items()}
+    if CORPUS == "0846a_487":
+        domains = {"pherc0009b": [sid for sid in domains.get("pherc0009b", []) if sid == 20250919125754]}
     return {name: ids for name, ids in domains.items() if ids}
 
 
@@ -235,6 +297,12 @@ def corpus_segments(name: str, labelled_only: bool = True) -> dict[str, Segment]
 def _corpus_segments(name: str) -> dict[str, Segment]:
     if name == "mix28":
         return dict(SEGMENTS)
+    if name == "mix28x":
+        return {**SEGMENTS, **{alias: segment for alias, segment in ALL_SEGMENTS.items()
+                               if int(alias) in NEW_HAND_SHEETS or int(alias) in HERCULEX_SHEETS}}
+    if name == "mix28x_new":
+        return {**SEGMENTS, **{alias: segment for alias, segment in ALL_SEGMENTS.items()
+                               if int(alias) in NEW_HAND_SHEETS or int(alias) in HERCULEX2_TRAIN}}
     if name == "mix26":
         return _frozen(SEGMENTS)
     if name == "prize":
@@ -248,6 +316,10 @@ def _corpus_segments(name: str) -> dict[str, Segment]:
         return {alias: segment for alias, segment in mix25.items() if alias not in MIX22_DROPPED}
     if name == "0846a":
         return {alias: segment for alias, segment in mix25.items() if segment.scroll == "0846A"}
+    if name == "0846a_prize":  # the 14 PHerc0846A sheets of mix28 plus the prize sheet (finetune_readerv3.py: no exclusion zones)
+        return {**{alias: segment for alias, segment in SEGMENTS.items() if segment.scroll == "0846A"}, **PRIZE_SEGMENTS}
+    if name == "0846a_487":  # the 14 PHerc0846A sheets of mix28 plus PHerc0009B patch 487
+        return {**{alias: segment for alias, segment in SEGMENTS.items() if segment.scroll == "0846A"}, "20250919125754": SEGMENTS["20250919125754"]}
     raise ValueError(f"unknown corpus {name!r}; choose from {CORPORA}")
 
 
@@ -261,10 +333,9 @@ ASSEMBLER_NAMES = (*TRAINING_NAMES, HOLDOUT_NAME)
 
 
 # where the trainings of the default corpora leave their model: HercUeNet on CORPUS, the two fine-tunes on FINETUNE_CORPUS.
-# RUN_TAG marks the trainings made against the current prize sheet (their exclusion masks, cues and staged data). _ps3 = the 2026-11-09
-# remake, _ps4 = the 2026-11-12 prize sheet PRIZESHEET_11_11_flatboi_flatboi_abf; the runs tagged _ps2 were made against PRIZESHEET_NEW and the runs without a tag against the 2026-11-02 sheet; they stay on disk
-# (models/runs/cue_dropout_labelsv6_mix28_ps2, reader-v3/runs/mix28_ps2, nader-fork/runs/v8in_mix28_4ep_ps2; their schedules were 4000 steps / 4 epochs, cut at step 2000 / epoch 1)
-RUN_TAG = "_ps4"
+# RUN_TAG marks the trainings made against the prize-sheet exclusions of its day (their masks, cues and staged data): _ps6 = the retrains of 2026-11-17 against PRIZESHEET_11_17_2, _ps7 = the mix28x trainings against PRIZESHEET_11_19_flatboi (default_models() reads them).
+# Runs with an earlier tag (_ps2 .. _ps5, untagged) were made against a superseded prize sheet and may have trained near the current one.
+RUN_TAG = "_ps7"
 # every run is made twice with different training seeds (tags s1 / s2); VESUVIUS_SEED_TAG picks the seed of train.py,
 # finetune_readerv3.py and finetune_v8in.py and ends their run names. s1 keeps each trainer's own default seed (the earlier runs),
 # s2 is a second fixed seed. The train / validation split seed (HercUeNet coordinate_hash_seed) stays 17 for both.
@@ -275,7 +346,7 @@ if SEED_TAG not in SEEDS:
 SEED = SEEDS[SEED_TAG]
 # the background (papyrus) weight of the two fine-tunes' BCE term, slightly lower than before (v8-in 25, reader-v3 1.0: -20% each),
 # so predicting ink on papyrus is punished a little less
-V8IN_NEG_WEIGHT = 20.0
+V8IN_NEG_WEIGHT = 10.0  # mix28x: half of the mix28 value (20), so v8-in guesses more ink
 READER_NEG_WEIGHT = 0.8
 CUE_DROPOUT_RUN = f"cue_dropout_labelsv6_{CORPUS}{RUN_TAG}_{SEED_TAG}"
 READER_RUN = f"{FINETUNE_CORPUS}{RUN_TAG}_{SEED_TAG}"
@@ -283,8 +354,12 @@ READER_RUN = f"{FINETUNE_CORPUS}{RUN_TAG}_{SEED_TAG}"
 # step READER_STOP_STEPS / epoch V8IN_STOP_EPOCHS are the ones the ensemble uses (SELECTED_* below)
 READER_STEPS = 4000
 V8IN_EPOCHS = 4
-READER_STOP_STEPS = 1000
-V8IN_STOP_EPOCHS = 3
+READER_STOP_STEPS = int(os.environ.get("VESUVIUS_READER_STEP", 1000))  # the step the ensemble uses; finetune_readerv3.py stops itself there (the 4000-step schedule is kept)
+# Studio: the 2000-step schedule (lr 2e-5, 100 warm-up steps, cosine to 10%), stopped (and saved) at step 500, which is the checkpoint the ensemble uses
+STUDIO_STEPS, STUDIO_STOP_STEPS = 2000, 500
+STUDIO_RUN = f"{FINETUNE_CORPUS}{RUN_TAG}"
+STUDIO_RELEASED = REPO / "models" / "studio" / "studio-softloss-20261023-ema.safetensors"  # the released model: finetune_studio.py setup; shown, not ensembled
+V8IN_STOP_EPOCHS = 2  # v8-in is stopped after the second epoch of its 4-epoch schedule (trained-epoch0.ckpt and trained-epoch1.ckpt are kept); finetune_v8in.py stops itself there
 V8IN_RUN = f"v8in_{FINETUNE_CORPUS}_{V8IN_EPOCHS}ep{RUN_TAG}_{SEED_TAG}"
 # train.py also saves the weights after these epochs as models/runs/<run>/epoch_<n>.pth (next to best_model_*.pth and final.pth)
 CUE_SAVE_EPOCHS = (1, 2, 3, 4)
@@ -298,25 +373,27 @@ CUE_CHECKPOINT = CUE_EPOCH_PATHS[int(_cue_epoch)] if _cue_epoch else REPO / "mod
 # default trainings (not the best-validation checkpoint); they exist once utils/queue_mix28.sh has run
 MODEL_PATHS = {
     "cue_dropout": CUE_CHECKPOINT,    # train.py: final.pth = weights after the last epoch (4), or epoch_<n>.pth with VESUVIUS_CUE_EPOCH
-    "reader_v3": REPO / "reader-v3" / "runs" / READER_RUN / f"ckpt_{READER_STOP_STEPS:06d}.pth",    # finetune_readerv3.py, step 2000 of the 4000-step schedule
-    "v8in": REPO / "nader-fork" / "runs" / V8IN_RUN / "runs" / "*" / "checkpoints" / f"trained-epoch{V8IN_STOP_EPOCHS - 1}.ckpt",  # finetune_v8in.py (a glob: exported on first use)
+    "studio": REPO / "models" / "studio" / STUDIO_RUN / f"step_{STUDIO_STOP_STEPS:06d}.safetensors",  # finetune_studio.py, step 500 of the 2000-step schedule
+    "reader_v3": REPO / "reader-v3" / "runs" / READER_RUN / f"ckpt_{READER_STOP_STEPS:06d}.pth",    # finetune_readerv3.py, step 1000 of the 4000-step schedule
+    "v8in": REPO / "nader-fork" / "runs" / V8IN_RUN / "runs" / "*" / "checkpoints" / f"trained-epoch{int(os.environ.get('VESUVIUS_V8IN_EPOCH', 1)) - 1}.ckpt",  # finetune_v8in.py (a glob: exported on first use)
 }
 # ---- the models the ensemble uses ---------------------------------------------------------------------------------------------
-# HercUeNet epoch 3, reader-v3 step 1000 and v8-in epoch 3: early checkpoints of the FULL schedules (4 epochs / 4000 steps / 4 epochs, the
-# trainers run to the end so the learning rate progresses as scheduled; the checkpoints below are simply the ones that are used).
-# HercUeNet and reader-v3 are maxed over the depth shifts -2..0, v8-in over -2..-1 (ensemble_eval.ipynb, utils/seed_ensemble.py).
-SELECTED_CUE_EPOCH, SELECTED_READER_STEP, SELECTED_V8IN_EPOCH = 3, READER_STOP_STEPS, V8IN_STOP_EPOCHS
-CUE_DEPTHS, READER_DEPTHS, V8IN_DEPTHS = (-2, -1, 0), (-2, -1, 0), (-2, -1)
-# where to look, in order: the runs of the current prize sheet (this seed tag), then the _ps3 runs (the 2026-11-09 sheet: their
-# exclusion zones are the old ones, acceptable until the _ps4 runs exist)
-SELECTED_TAGS = (f"{RUN_TAG}_{SEED_TAG}", "_ps3")
+# Studio step 500 (of 2000), reader-v3 step 1000 (of 4000) and v8-in epoch 1 (of 4): early checkpoints of the FULL schedules; the trainers keep the
+# learning-rate schedule of the full run and stop themselves at these checkpoints. HercUeNet is retired. No depth maxing. Stretches: Studio and
+# reader-v3 plain (p1 -> 0), v8-in p50 -> 0 (ensemble_eval.ipynb). The released Studio is shown next to its fine-tune and does not contribute.
+SELECTED_CUE_EPOCH, SELECTED_READER_STEP = 3, READER_STOP_STEPS
+SELECTED_V8IN_EPOCH = int(os.environ.get("VESUVIUS_V8IN_EPOCH", 1))  # the v8-in epoch the ensemble uses by default (1 or 2)
+CUE_DEPTHS, READER_DEPTHS, V8IN_DEPTHS = (0,), (0,), (0,)  # no depth maxing (ENSEMBLE_*_DEPTHS still override)
+# where to look: the runs of the current prize sheet (this seed tag), i.e. where a first run of the training scripts leaves them
+SELECTED_TAGS = (f"{RUN_TAG}_{SEED_TAG}",)
 
 
 def selected_models(tag: str) -> dict:
-    """the three checkpoints of the runs tagged `tag` (RUN_TAG[_seed]); a missing v8-in checkpoint is the path it would have."""
+    """the checkpoints of the runs tagged `tag` (RUN_TAG[_seed]); a missing v8-in checkpoint is the path it would have."""
     runs = REPO / "nader-fork" / "runs" / f"v8in_{FINETUNE_CORPUS}_{V8IN_EPOCHS}ep{tag}" / "runs"
     v8in = sorted(runs.glob(f"*/checkpoints/trained-epoch{SELECTED_V8IN_EPOCH - 1}.ckpt"))
     return {
+        "studio": REPO / "models" / "studio" / f"{FINETUNE_CORPUS}{RUN_TAG}" / f"step_{STUDIO_STOP_STEPS:06d}.safetensors",
         "cue": REPO / "models" / "runs" / f"cue_dropout_labelsv6_{CORPUS}{tag}" / f"epoch_{SELECTED_CUE_EPOCH}.pth",
         "reader": REPO / "reader-v3" / "runs" / f"{FINETUNE_CORPUS}{tag}" / f"ckpt_{SELECTED_READER_STEP:06d}.pth",
         "v8in": v8in[-1] if v8in else runs / "*" / "checkpoints" / f"trained-epoch{SELECTED_V8IN_EPOCH - 1}.ckpt",
@@ -327,8 +404,8 @@ def selected_models(tag: str) -> dict:
 def describe_selection(tag: str | None = None) -> str:
     """which checkpoints of the runs tagged `tag` (default: this seed's _ps4 run) the ensemble uses, and whether they exist yet."""
     models = selected_models(tag or SELECTED_TAGS[0])
-    return "\n".join(f"       ensemble uses {label}: {models[kind]} ({'exists' if Path(models[kind]).is_file() else 'not written yet'})"
-                     for kind, label in (("cue", "HercUeNet epoch 3"), ("reader", "reader-v3 step 1000"), ("v8in", "v8-in epoch 3")))
+    return "\n".join(f"       ensemble uses {label}: {models[kind]} ({'exists' if Path(models[kind]).exists() else 'not written yet'})"
+                     for kind, label in (("studio", f"Studio step {STUDIO_STOP_STEPS}"), ("reader", f"reader-v3 step {SELECTED_READER_STEP}"), ("v8in", f"v8-in epoch {SELECTED_V8IN_EPOCH}")))
 
 
 def default_models(verbose: bool = True, strict: bool = False) -> dict:
@@ -337,9 +414,9 @@ def default_models(verbose: bool = True, strict: bool = False) -> dict:
     so ENSEMBLE_* / VESUVIUS_CHECKPOINT overrides still work and the missing file is reported where it is used (strict=True raises here)."""
     for tag in SELECTED_TAGS:
         models = selected_models(tag)
-        if all(Path(models[kind]).is_file() for kind in ("cue", "reader", "v8in")):
+        if all(Path(models[kind]).exists() for kind in ("studio", "reader", "v8in")):  # HercUeNet ("cue") is retired: optional
             if verbose:
-                print(f"[models] {tag}: HercUeNet {models['cue']}, reader-v3 {models['reader']}, v8-in {models['v8in']}", flush=True)
+                print(f"[models] {tag}: Studio {models['studio']}, reader-v3 {models['reader']}, v8-in {models['v8in']}", flush=True)
             return models
     models = selected_models(SELECTED_TAGS[0])
     if strict:
@@ -372,11 +449,11 @@ MIX6_MODEL_PATHS = {
 
 def train_ids() -> list[int]:
     """the 25 trained aliases in the order of the training config (0846A first, then the other domains)."""
-    return [*TRAIN_0846A, *(sid for ids in DOMAINS.values() for sid in ids)]
+    return [*TRAIN_0846A_CORPUS, *(sid for ids in DOMAINS.values() for sid in ids)]
 
 
 def vis_ids() -> list[int]:
-    return [*TRAIN_0846A, HOLDOUT]
+    return [*TRAIN_0846A_CORPUS, HOLDOUT]
 
 
 def all_ids() -> list[int]:
@@ -387,7 +464,7 @@ def render_id(alias) -> str:
     alias = int(alias)
     if alias == HOLDOUT:
         return str(HOLDOUT_RENDER)
-    return str(SHEETS_0846A[alias][0]) if alias in SHEETS_0846A else str(alias)
+    return str(SHEETS_0846A_ALL[alias][0]) if alias in SHEETS_0846A_ALL else str(alias)
 
 
 def render_mask_path(render) -> Path:
@@ -398,7 +475,7 @@ def render_mask_path(render) -> Path:
 
 def render_ids_0846a() -> list[str]:
     """render zarr ids of the 0846A part of the corpus (11 trained sheets + the prize sheet)."""
-    return [render_id(alias) for alias in (*TRAIN_0846A, HOLDOUT)]
+    return [render_id(alias) for alias in (*TRAIN_0846A_CORPUS, HOLDOUT)]
 
 
 @functools.lru_cache(maxsize=1)
@@ -415,7 +492,7 @@ def volume_id(alias) -> str:
 
 def volume_path(alias) -> Path:
     """the zarr every training reads for this alias (the 0846A sheets read their render)."""
-    return zarr_dir() / f"{render_id(alias) if int(alias) in SHEETS_0846A or int(alias) == HOLDOUT else volume_id(alias)}.zarr"
+    return zarr_dir() / f"{render_id(alias) if int(alias) in SHEETS_0846A_ALL or int(alias) == HOLDOUT else volume_id(alias)}.zarr"
 
 
 def zarr_dir() -> Path:
@@ -512,10 +589,12 @@ def ensure_anchors(ids=None) -> None:
 # ---- asf cues: depth shifts 0 (cue_dir), -1 and +1 (the windows depth jitter reads) -------------------------------------------
 
 CUE_DIRS = {0: "cue_asf_morph", -1: "cue_asf_morph_dm1", 1: "cue_asf_morph_dp1"}
+# only HercUeNet reads the asf cues, and it is retired (2026-11-20): the data check ignores them unless VESUVIUS_CUES=1
+CUES_REQUIRED = os.environ.get("VESUVIUS_CUES", "0") == "1"
 
 
 def window_offset(alias) -> int:
-    return WINDOW_OFFSET_0846A if int(alias) in (*TRAIN_0846A, HOLDOUT) else 0
+    return WINDOW_OFFSET_0846A if int(alias) in (*TRAIN_0846A, *NEW_HAND_SHEETS, *HERCULEX_SHEETS, *HERCULEX2_SHEETS, HOLDOUT) else 0
 
 
 def cue_file(alias, delta: int = 0) -> Path:
@@ -528,7 +607,8 @@ def cue_config(alias, delta: int):
     config = Config()
     config.data.surface_window_offset_by_scroll = {int(alias): window_offset(alias) + delta}
     config.data.cue_dir = f"./{CUE_DIRS[delta]}"
-    if int(alias) in SHEETS_0846A:  # trained 0846A sheets: the cue never sees the prize-sheet zone
+    if int(alias) in SHEETS_0846A:
+        # trained 0846A sheets: the cue never sees the prize-sheet zone
         config.data.cue_exclusion_dir = str(cue_zone_path(alias).parent)
     return config
 
@@ -621,7 +701,7 @@ def ensure_cues(ids=None, workers: int = 8, force: bool = False) -> None:
 def stale_cues(ids=None) -> list[str]:
     """cue maps older than their render, surface labels or mask (rebuilt only with --rebuild-cues)."""
     return [f"{alias}: asf cue {cue_file(alias, delta)} is older than its render, surface labels or mask"
-            for alias in (ids or all_ids()) for delta in cue_shifts(alias)
+            for alias in (ids or all_ids()) for delta in cue_shifts(alias) if CUES_REQUIRED
             if cue_file(alias, delta).is_file() and _stale(cue_file(alias, delta), alias)]
 
 
@@ -658,7 +738,7 @@ def status(ids=None, derived: bool = True) -> list[str]:
             paths += [REPO / "surface_labels" / alias / "depth.npy", REPO / "surface_labels" / alias / "confidence.npy"]
             if volume_id(alias) != alias:
                 paths.append(zarrs / f"{volume_id(alias)}.zarr")
-            if int(alias) in SHEETS_0846A or int(alias) == HOLDOUT:
+            if int(alias) in SHEETS_0846A_ALL or int(alias) == HOLDOUT:
                 paths += [zarrs / f"{alias}.zarr", REPO / "masks" / f"{alias}.png"]
         problems += [f"{alias}: missing {path}" for path in paths if not path.exists()]
         if not derived:
@@ -666,7 +746,7 @@ def status(ids=None, derived: bool = True) -> list[str]:
         for name, table in (("norm_cache.json", norms), ("surface_anchor_cache.json", anchors)):
             if volume_id(alias) not in table:
                 problems.append(f"{alias}: no {volume_id(alias)} entry in {name}")
-        for delta in cue_shifts(alias):
+        for delta in cue_shifts(alias) if CUES_REQUIRED else ():
             if not cue_file(alias, delta).is_file():
                 problems.append(f"{alias}: missing asf cue {cue_file(alias, delta)}")
             elif _zone_newer(cue_file(alias, delta), alias):

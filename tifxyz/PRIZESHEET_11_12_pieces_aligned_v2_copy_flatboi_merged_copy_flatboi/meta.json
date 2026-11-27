@@ -1,0 +1,39 @@
+{
+    "area_cm2": 8.480165150862762,
+    "area_vx2": 9675357.848763002,
+    "bbox": [
+        [
+            2015.1341552734375,
+            2518.762939453125,
+            11896.76953125
+        ],
+        [
+            6502.78515625,
+            4103.6181640625,
+            13809.806640625
+        ]
+    ],
+    "date_last_modified": "20261113110051000",
+    "elapsed_time_s": 53.902484,
+    "format": "tifxyz",
+    "grid_offset": [
+        2,
+        2
+    ],
+    "max_gen": 1,
+    "name": "PRIZESHEET_11_12_pieces_aligned_v2_copy_flatboi_merged_copy",
+    "scale": [
+        0.05000000074505806,
+        0.05000000074505806
+    ],
+    "seed": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "seed_surface_id": "PRIZESHEET_11_12_pieces_aligned_v2_copy_flatboi_merged_copy_flatboi",
+    "source": "seam2_merge smart: left cut col 219, right cut col 257 (tau 12), 1 U-bridge nodes per row",
+    "type": "seg",
+    "uuid": "PRIZESHEET_11_12_pieces_aligned_v2_copy_flatboi_merged_copy_flatboi",
+    "vc3d_segment_display_id": "PRIZESHEET_11_12_pieces_aligned_v2_copy_flatboi_merged"
+}

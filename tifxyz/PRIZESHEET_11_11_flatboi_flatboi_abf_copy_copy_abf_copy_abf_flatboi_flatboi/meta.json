@@ -1,0 +1,36 @@
+{
+    "area_cm2": 13.763275956763806,
+    "area_vx2": 15703069.183672417,
+    "bbox": [
+        [
+            1943.250244140625,
+            2515.51220703125,
+            11638.8515625
+        ],
+        [
+            6585.908203125,
+            4303.9248046875,
+            14314.732421875
+        ]
+    ],
+    "date_last_modified": "20261112170500759",
+    "elapsed_time_s": 140.4222953,
+    "format": "tifxyz",
+    "grid_offset": [
+        2,
+        2
+    ],
+    "max_gen": 49,
+    "scale": [
+        0.05000000074505806,
+        0.05000000074505806
+    ],
+    "seed": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "seed_surface_id": "PRIZESHEET_11_11_flatboi_flatboi_abf_copy_copy_abf_copy_abf_flatboi_flatboi",
+    "type": "seg",
+    "uuid": "PRIZESHEET_11_11_flatboi_flatboi_abf_copy_copy_abf_copy_abf_flatboi_flatboi"
+}

@@ -32,17 +32,20 @@ LOCAL_ZARR_DIR = Path(os.environ.get("VES_LOCAL_ZARR_DIR", "/dev/shm/ves_zarr_ca
 READ_WORKERS = 32
 
 
-def read_volume(zarr_path) -> np.ndarray:
-    """the whole zarr array in memory, one thread per chunk block."""
+def read_volume(zarr_path, z0=None, z1=None) -> np.ndarray:
+    """the zarr array (layers z0:z1 when given) in memory, one thread per chunk block; only the chunks of those layers are read."""
     import zarr
 
     array = zarr.open(str(zarr_path), mode="r")
-    out = np.empty(array.shape, array.dtype)
-    origins = itertools.product(*[range(0, size, step) for size, step in zip(array.shape, array.chunks)])
-    blocks = [tuple(slice(start, start + step) for start, step in zip(origin, array.chunks)) for origin in origins]
+    z0, z1 = 0 if z0 is None else z0, array.shape[0] if z1 is None else z1
+    out = np.empty((z1 - z0, *array.shape[1:]), array.dtype)
+    step = array.chunks[0]
+    ranges = [range(z0 - z0 % step, z1, step), *[range(0, size, chunk) for size, chunk in zip(array.shape[1:], array.chunks[1:])]]
+    blocks = [tuple(slice(max(start, lo), min(start + chunk, hi)) for start, chunk, lo, hi in
+                    zip(origin, array.chunks, (z0, 0, 0), (z1, *array.shape[1:]))) for origin in itertools.product(*ranges)]
 
     def fill(block):
-        out[block] = array[block]
+        out[block[0].start - z0:block[0].stop - z0, block[1], block[2]] = array[block]
 
     with ThreadPoolExecutor(READ_WORKERS) as pool:
         list(pool.map(fill, blocks))

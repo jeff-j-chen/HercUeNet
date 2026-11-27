@@ -22,8 +22,14 @@ REPO = Path(__file__).resolve().parent.parent
 LIST_PATH = Path(__file__).resolve().parent / "depth_reversed.json"
 
 
+LOCAL_LIST_PATH = LIST_PATH.with_name("depth_reversed_local.json")  # git-excluded (.git/info/exclude): sheets that are not published; same format
+
+
 def reversed_ids() -> set[str]:
-    return set(json.loads(LIST_PATH.read_text(encoding="utf-8"))["zids"])
+    ids = set(json.loads(LIST_PATH.read_text(encoding="utf-8"))["zids"])
+    if LOCAL_LIST_PATH.is_file():
+        ids |= set(json.loads(LOCAL_LIST_PATH.read_text(encoding="utf-8"))["zids"])
+    return ids
 
 
 def is_flipped(zarr_path) -> bool:

@@ -1,8 +1,8 @@
-"""Fine-tune reader-v3 on the mix28 corpus (utils/mix6.py) for a 4000-step schedule (utils/queue_ps4.sh runs it to the end; the ensemble uses the step-1000 checkpoint), from the released checkpoint.
-(mix28 = the corpus of all three trainings: the 14 PHerc0846A sheets + the labelled donor patches of PHerc0009B, 0343, 1447, 0841,
-0172, 0139, 1667, 0500P2 and PHerc0306B; a donor still without ink or train mask is skipped.
---corpus mix26 | mix25 | mix22 | mix18 | 0846a trains another corpus on the same staged data; --steps and
---run-name change the run.)
+"""Fine-tune reader-v3 on the mix28x_new corpus (utils/mix6.py) from the released checkpoint: the learning-rate schedule of a 4000-step run (sgd lr 0.003,
+200 warm-up steps, cosine), stopped at step 1000, the checkpoint the ensemble uses (--stop-step); --init <checkpoint> starts from another one.
+(mix28x_new = the 14 PHerc0846A sheets + the 2 hand-labelled 0846B sheets + the regenerated HerculeX x export of 2026-11-21 (253 sheets; utils/assemble_herculex2.py) +
+the labelled donor patches of PHerc0009B, 0343, 1447, 0841, 0172, 0139, 1667, 0500P2 and PHerc0306B; hand-grown 0846A/B : x : each donor scroll = 4 : 2 : 1 per batch of 14.
+--corpus mix28x (the first x export) | mix28 | mix26 | mix25 | mix22 | mix18 | 0846a trains another corpus on the same staged data; --steps and --run-name change the run.)
 
 one command does everything and can be re-run (finished steps are skipped):
 
@@ -23,11 +23,11 @@ prep   stages every corpus segment the way the reader reads a corpus: a 21-layer
        (holdout_exclusion_reader/, utils/holdout_exclusion.py): no supervision there, and those voxels of the staged volume are
        zeroed (like the area outside the sheet) so no tile reads the prize sheet. prep and train refuse to run until the masks
        were computed against the current prize sheet.
-train  batch 13 (0846A 4, each of the other scrolls 1, the slots of a missing scroll go to 0009B; sgd, lr 0.003, 200 warmup steps), 384 px
-       tiles, fp16; checkpoints every 1000 steps.
+train  batch 14 (hand-grown 0846A/B 4, HerculeX 2, each donor scroll 1; sgd, lr 0.003, 200 warmup steps, 4000-step schedule), 384 px tiles, fp16;
+       a checkpoint every 1000 steps. The trainer is stopped (utils/stop_at.py) once --stop-step (1000) is written, so the learning rate is the one of the full run.
 
-output: reader-v3/runs/mix28_ps4_<seed>/ckpt_<step>.pth (printed at the end; a checkpoint every 1000 steps; the model used is step 1000; <seed> = s1 / s2, VESUVIUS_SEED_TAG or --seed; the BCE term weighs the background by 0.8, see patch_loss). ensemble_eval.ipynb and 0846A_eval.ipynb read it through
-utils/mix6.MODEL_PATHS.
+output: reader-v3/runs/mix28x_new_ps7_<seed>/ckpt_001000.pth (printed at the end; <seed> = s1 / s2, VESUVIUS_SEED_TAG or --seed; the BCE term weighs the background by 0.8,
+see patch_loss). ensemble_eval.ipynb and 0846A_eval.ipynb read it through utils/mix6.MODEL_PATHS.
 Needs the corpus data (python3 assemble_training_segments.py --mix28), git, uv and a GPU.
 """
 from __future__ import annotations
@@ -44,7 +44,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO))
 from utils import holdout_exclusion, mix6, prize_finetune  # noqa: E402
-from utils.predict_models import venv_python  # noqa: E402
+from utils.predict_models import read_volume, venv_python  # noqa: E402
+from utils.stop_at import run_until  # noqa: E402
 
 READER = Path(os.environ.get("READER_V3_DIR", REPO / "reader-v3"))
 VILLA = Path(os.environ.get("VILLA_DIR", REPO / "villa-ink"))
@@ -54,18 +55,22 @@ HF_REPO, CHECKPOINT_FILE, CHECKPOINT_BYTES = "domenicor046/reader-v3", "reader-v
 PYTHON = READER / ".venv" / "bin" / "python"
 CHECKPOINT = READER / CHECKPOINT_FILE
 DATA = READER / "data" / "mix25"
+PREP_JOBS = int(os.environ.get("VES_STAGE_JOBS", 4))  # sheets staged in parallel
 DEPTH = 21  # crop depth; label plane = DEPTH // 2
 # samples per batch of each scroll (fixed_scroll_prior sampling); 0846A has fourteen sheets, every other scroll one to five patches
-BATCH_COUNTS = {"0846A": 4, "0343": 1, "0009B": 1, "1447": 1, "0841": 1, "0814": 1, "0172": 1, "0139": 1, "1667": 1, "0500P2": 1,
+BATCH_COUNTS = {"0846A": 4, "0846Ax": 2, "0343": 1, "0009B": 1, "1447": 1, "0841": 1, "0814": 1, "0172": 1, "0139": 1, "1667": 1, "0500P2": 1,
                 "0306B": 1}
 BATCH = 13
-STEPS = mix6.READER_STEPS
+STEPS = mix6.READER_STEPS  # the length of the learning-rate schedule
+STOP_STEP = mix6.READER_STOP_STEPS  # the run is stopped at this checkpoint
 LEARNING_RATE, WARMUP_STEPS, SAVE_EVERY = 0.003, 200, 1000
 SEED = mix6.SEED["reader_v3"]  # train + sampling seed (utils/mix6.py SEEDS, VESUVIUS_SEED_TAG)
 NEG_WEIGHT = mix6.READER_NEG_WEIGHT  # weight of the background pixels in the BCE term (1.0 before; see utils/mix6.py)
+PATCH_FINDING = VILLA / "ink-detection" / "koine_machines" / "data" / "patch_finding" / "default.py"
 LOSS_FILE = VILLA / "ink-detection" / "koine_machines" / "training" / "loss" / "losses.py"
 NNUNET_LOSSES = VILLA / "vesuvius" / "src" / "vesuvius" / "models" / "training" / "loss" / "nnunet_losses.py"
 EXCLUSION = holdout_exclusion.READER_EXCLUSION_DIR
+NO_EXCLUSION = False  # corpus 0846a_prize trains on the prize sheet itself: no discard zones, and its own staged data folder
 # set from the command line: which corpus (utils/mix6.py corpus_segments) is trained and where it goes
 CORPUS, RUN_NAME = mix6.FINETUNE_CORPUS, mix6.READER_RUN
 # --init: start from this checkpoint instead of the released reader-v3.pth (the special prize-sheet fine-tune starts from a mix28 step)
@@ -86,15 +91,20 @@ def run_dir(smoke: bool) -> Path:
 
 
 def final_checkpoint(smoke: bool) -> Path:
-    return run_dir(smoke) / f"ckpt_{(20 if smoke else STEPS):06d}.pth"  # the full mix25 run's is mix6.MODEL_PATHS["reader_v3"]
+    return run_dir(smoke) / f"ckpt_{(20 if smoke else STOP_STEP):06d}.pth"  # the full mix25 run's is mix6.MODEL_PATHS["reader_v3"]
 
 
 def batch_counts() -> dict:
     """samples per batch of each scroll of the (labelled part of the) corpus; the batch stays 13."""
     scrolls = list(dict.fromkeys(segment.scroll for segment in mix6.corpus_segments(CORPUS).values()))
-    if CORPUS in ("0846a", "prize"):
+    if CORPUS in ("0846a", "prize", "0846a_prize"):
         return {"0846A": BATCH}
+    if CORPUS == "0846a_487":  # the default 2 : 1 domain weight of 0846A and a donor
+        return {"0846A": 9, "0009B": BATCH - 9}
     counts = {scroll: BATCH_COUNTS[scroll] for scroll in scrolls}
+    if "0846Ax" in counts:  # mix28x: hand-grown 0846A/B sheets 4 slots, HerculeX ones 2, every donor scroll 1: batch 14, 0846A/B are 43% of it
+        counts["0846A"], counts["0846Ax"] = 4, 2
+        return counts
     if CORPUS == "mix18":  # every donor scroll is one patch: 2 slots keep the study's 0846A 2 : donor 1 domain weight
         return {scroll: 4 if scroll == "0846A" else 2 for scroll in scrolls}
     # a scroll missing from the corpus (PHerc0814, or a donor without labels) leaves its slot to 0009B, the strongest donor
@@ -139,6 +149,87 @@ def patch_loss() -> None:
     print("[patch] background weight added to LabelSmoothedDCAndBCELoss", flush=True)
 
 
+# ---- patch finding (a local patch of the pinned koine_machines checkout) ---------------------------------------------------
+
+FIND_OLD = (
+    """    surface_slice = _combined_patch_discovery_support(
+        supervision_mask[mask_scan_surface],
+        (
+            None
+            if validation_mask is None
+            else validation_mask[validation_scan_surface]
+        ),
+    )""",
+    """        supervision_patch = supervision_mask[
+            mask_scan_surface,
+            y0_s:y0_s + scan_patch_h,
+            x0_s:x0_s + scan_patch_w,
+        ]""",
+    """            validation_patch = validation_mask[
+                validation_scan_surface,
+                y0_s:y0_s + scan_patch_h,
+                x0_s:x0_s + scan_patch_w,
+            ]""",
+    """        label_patch = inklabels[
+            mask_scan_surface,
+            y0_s:y0_s + scan_patch_h,
+            x0_s:x0_s + scan_patch_w,
+        ]""",
+)
+FIND_NEW = (
+    """    # one read of each label plane: the per-patch crops below are numpy slices of these (a crop read from the zarr costs ~0.2 s each on the
+    # network drive: 58k patches of the mix28x corpus took 39 minutes; the planes themselves are read by 16 threads in bands of chunk rows)
+    supervision_plane = _read_plane(supervision_mask, mask_scan_surface)
+    validation_plane = None if validation_mask is None else _read_plane(validation_mask, validation_scan_surface)
+    inklabel_plane = _read_plane(inklabels, mask_scan_surface)
+    surface_slice = _combined_patch_discovery_support(supervision_plane, validation_plane)""",
+    """        supervision_patch = supervision_plane[
+            y0_s:y0_s + scan_patch_h,
+            x0_s:x0_s + scan_patch_w,
+        ]""",
+    """            validation_patch = validation_plane[
+                y0_s:y0_s + scan_patch_h,
+                x0_s:x0_s + scan_patch_w,
+            ]""",
+    """        label_patch = inklabel_plane[
+            y0_s:y0_s + scan_patch_h,
+            x0_s:x0_s + scan_patch_w,
+        ]""",
+)
+
+
+FIND_IMPORT = "from koine_machines.common.common import open_zarr\n"
+FIND_HELPER = FIND_IMPORT + """
+
+def _read_plane(array, z):
+    \"\"\"array[z] (one full plane) read by 16 threads in bands of two chunk rows: the staged label zarrs are hundreds of small files on a network drive.\"\"\"
+    from concurrent.futures import ThreadPoolExecutor
+
+    out = np.empty(array.shape[1:], array.dtype)
+    band = max(1, int(array.chunks[1])) * 2
+
+    def read(y):
+        out[y:y + band] = array[z, y:y + band]
+
+    with ThreadPoolExecutor(16) as pool:
+        list(pool.map(read, range(0, out.shape[0], band)))
+    return out
+"""
+
+
+def patch_finding() -> None:
+    """read each label plane once instead of one zarr crop per candidate patch (idempotent; same patches, ~10x faster per segment)."""
+    text = PATCH_FINDING.read_text()
+    if "supervision_plane" in text:
+        return
+    if any(text.count(old) != 1 for old in (*FIND_OLD, FIND_IMPORT)):
+        raise SystemExit(f"[patch] {PATCH_FINDING} is not the pinned version: cannot speed up the patch finding")
+    for old, new in zip((*FIND_OLD, FIND_IMPORT), (*FIND_NEW, FIND_HELPER)):
+        text = text.replace(old, new)
+    PATCH_FINDING.write_text(text)
+    print("[patch] patch finding reads each label plane once", flush=True)
+
+
 # ---- setup ---------------------------------------------------------------------------------------------------------------
 
 def setup() -> None:
@@ -167,6 +258,7 @@ def setup() -> None:
         run(["uv", "pip", "install", "--python", PYTHON, "-r", REPO / "requirements_readerv3.txt"], env=UV_ENV)
         run(["uv", "pip", "install", "--python", PYTHON, "--no-deps", "-e", VILLA / "vesuvius", "-e", VILLA / "ink-detection"], env=UV_ENV)
     patch_loss()
+    patch_finding()
     run([PYTHON, "-c", "import koine_machines.training.train"])
 
     if not CHECKPOINT.is_file() or CHECKPOINT.stat().st_size != CHECKPOINT_BYTES:
@@ -190,8 +282,8 @@ def _signature(alias: str) -> str:
     paths = [REPO / "masks" / f"{segment.render}.png", REPO / "dilated_inklabels" / f"{alias}.png"]
     if segment.split_masked:
         paths.append(REPO / "train_masks" / f"{alias}.png")
-    exclusion = holdout_exclusion.exclusion_path(alias, EXCLUSION)
-    if exclusion.is_file():
+    exclusion = None if NO_EXCLUSION else holdout_exclusion.exclusion_path(alias, EXCLUSION)
+    if exclusion is not None and exclusion.is_file():
         paths.append(exclusion)
     for path in paths:
         digest.update(path.read_bytes())
@@ -205,7 +297,8 @@ def prep() -> None:
 
     from utils.dataloader import split_extra_labels
 
-    for alias, segment in mix6.corpus_segments(CORPUS).items():
+    def prep_one(item):
+        alias, segment = item
         folder = DATA / "labels" / alias
         stamp = folder / "prep.json"
         signature = _signature(alias)
@@ -214,7 +307,7 @@ def prep() -> None:
         rendered = mix6.zarr_mtime(mix6.volume_path(alias))
         if staged and stamp.is_file() and json.loads(stamp.read_text()).get("signature") == signature and rendered <= stamp.stat().st_mtime:
             print(f"[prep] {alias}: up to date")
-            continue
+            return
         for stale in (DATA / "volumes" / f"{alias}.zarr", folder):
             shutil.rmtree(stale, ignore_errors=True)
         source = zarr.open(str(mix6.volume_path(alias)), mode="r")
@@ -229,8 +322,8 @@ def prep() -> None:
         if segment.split_masked:
             split = cv2.imread(str(REPO / "train_masks" / f"{alias}.png"), cv2.IMREAD_GRAYSCALE)[:rows, :cols]
             mask = mask & ((split >= 240) | ((split >= 100) & (split <= 143))) & ~extra
-        discard = holdout_exclusion.load(alias, directory=EXCLUSION)
-        if discard is None and (int(alias) in mix6.SHEETS_0846A or CORPUS == "prize"):
+        discard = None if NO_EXCLUSION else holdout_exclusion.load(alias, directory=EXCLUSION)
+        if discard is None and not NO_EXCLUSION and (int(alias) in mix6.SHEETS_0846A or CORPUS == "prize"):
             raise SystemExit(f"[prep] {alias}: no exclusion in {EXCLUSION} (python3 -m utils.{'prize_finetune' if CORPUS == 'prize' else 'holdout_exclusion'})")
         if discard is not None:
             discard = discard[:rows, :cols]
@@ -245,16 +338,23 @@ def prep() -> None:
         (DATA / "volumes").mkdir(parents=True, exist_ok=True)
         shape = (DEPTH, rows, cols)
         volume = _plane_zarr(DATA / "volumes" / f"{alias}.zarr", shape, (DEPTH, 128, 128), source.dtype)
+        # the render is ~100k small chunk files on the network drive: one threaded read of the 21 layers, not a serial strip loop
+        block = read_volume(mix6.volume_path(alias), z0, z0 + DEPTH)[:, :rows, :cols]
+        if discard is not None:
+            block[:, discard] = 0  # the prize-sheet zone reads as outside the sheet
         for y in range(0, rows, 512):
-            block = np.asarray(source[z0:z0 + DEPTH, y:min(y + 512, rows), :cols])
-            if discard is not None:
-                block[:, discard[y:y + 512]] = 0  # the prize-sheet zone reads as outside the sheet
-            volume[:, y:y + 512, :] = block
+            volume[:, y:y + 512, :] = block[:, y:y + 512]
+        del block
         for kind, plane in (("inklabels", ink), ("supervision_mask", mask)):
             array = _plane_zarr(folder / f"{alias}_{kind}.zarr", shape, (DEPTH, 128, 128), np.uint8)
             array[DEPTH // 2, :, :] = plane.astype(np.uint8) * 255
         stamp.write_text(json.dumps({"signature": signature}))
         print(f"[prep] {alias} ({segment.scroll}): {shape} ink={int(ink.sum())} supervised={int(mask.sum())}", flush=True)
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(PREP_JOBS) as pool:
+        list(pool.map(prep_one, mix6.corpus_segments(CORPUS).items()))
 
 
 # ---- train ---------------------------------------------------------------------------------------------------------------
@@ -328,25 +428,30 @@ def train(smoke: bool) -> Path:
         elif list(run_dir(smoke).glob("ckpt_*.pth")):
             raise SystemExit(f"[train] {run_dir(smoke)} holds the checkpoints of an interrupted run; delete it to train again")
     patch_loss()
+    patch_finding()
     path = config(smoke)
     env = dict(os.environ, PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
     # the local mirror: every spawned loader worker re-imports torch, which took ~85 s each from the network-drive venv
-    run([venv_python(READER / ".venv"), "-m", "koine_machines.training.train", path], cwd=READER, env=env)
+    if smoke:
+        run([venv_python(READER / ".venv"), "-m", "koine_machines.training.train", path], cwd=READER, env=env)
+    else:  # the full schedule's learning rate, stopped at the checkpoint the ensemble uses
+        run_until([venv_python(READER / ".venv"), "-m", "koine_machines.training.train", path], str(final), cwd=READER, env=env)
     if not final.is_file():
         raise SystemExit(f"[train] finished without {final}")
     return final
 
 
 def main() -> None:
-    global CORPUS, STEPS, RUN_NAME, INIT, LEARNING_RATE, WARMUP_STEPS, SAVE_EVERY, EXCLUSION, SEED, NEG_WEIGHT
+    global CORPUS, STEPS, STOP_STEP, RUN_NAME, INIT, LEARNING_RATE, WARMUP_STEPS, SAVE_EVERY, EXCLUSION, SEED, NEG_WEIGHT, DATA, NO_EXCLUSION
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", default="all", choices=("all", "setup", "prep", "train"))
     parser.add_argument("--smoke", action="store_true", help="20 steps into runs/mix25_smoke")
     parser.add_argument("--corpus", default=CORPUS, choices=mix6.CORPORA, help="segments to train on (staged data is shared)")
-    parser.add_argument("--steps", type=int, default=STEPS, help="optimizer steps (a checkpoint every 1000)")
+    parser.add_argument("--steps", type=int, default=STEPS, help="length of the learning-rate schedule in optimizer steps (a checkpoint every 1000)")
+    parser.add_argument("--stop-step", type=int, default=STOP_STEP, help="stop the run after this checkpoint (the checkpoint the ensemble uses)")
     parser.add_argument("--run-name", default=None, help="folder under reader-v3/runs (default: mix28 for the default corpus and steps, else <corpus>_<steps>)")
     parser.add_argument("--dry-run", action="store_true", help="train: write the config and print what would train, then stop")
-    parser.add_argument("--init", default=None, help="train from this checkpoint (weights only) instead of the released reader-v3.pth")
+    parser.add_argument("--init", default=None, help="train from this checkpoint (weights only); default (or 'released') = the released reader-v3.pth")
     parser.add_argument("--lr", type=float, default=None, help=f"learning rate (default {LEARNING_RATE})")
     parser.add_argument("--warmup", type=int, default=None, help=f"warmup steps (default {WARMUP_STEPS})")
     parser.add_argument("--save-every", type=int, default=None, help=f"checkpoint every N steps (default {SAVE_EVERY})")
@@ -355,8 +460,8 @@ def main() -> None:
     args = parser.parse_args()
     SEED = args.seed if args.seed is not None else SEED
     NEG_WEIGHT = args.neg_weight if args.neg_weight is not None else NEG_WEIGHT
-    CORPUS, STEPS = args.corpus, args.steps
-    if args.init:
+    CORPUS, STEPS, STOP_STEP = args.corpus, args.steps, args.stop_step
+    if args.init and args.init != "released":
         INIT = Path(args.init).resolve()
         if not INIT.is_file():
             raise SystemExit(f"--init {INIT} does not exist")
@@ -365,6 +470,8 @@ def main() -> None:
     SAVE_EVERY = args.save_every or SAVE_EVERY
     if CORPUS == "prize":  # the prize sheet alone: its discard mask is the half-brightness region of its label
         EXCLUSION = prize_finetune.DIRS["reader_v3"]
+    if CORPUS == "0846a_prize":  # sheets of one scroll plus the prize sheet; staged apart so the shared mix28 staging keeps its zones
+        NO_EXCLUSION, DATA = True, READER / "data" / "0846a_prize"
     RUN_NAME = args.run_name or (mix6.READER_RUN if (CORPUS, STEPS) == (mix6.FINETUNE_CORPUS, mix6.READER_STEPS) else f"{CORPUS}_{STEPS}")
     os.chdir(REPO)
     final = None
@@ -373,7 +480,7 @@ def main() -> None:
     if args.command in ("all", "prep", "train"):
         # NOTHING trains on the prize sheet: the 18-voxel masks must exist for every trained 0846A sheet, computed against it
         # (the prize corpus is the prize sheet itself: its region mask must match its label instead)
-        problems = prize_finetune.problems("reader_v3") if CORPUS == "prize" else holdout_exclusion.problems("reader_v3")
+        problems = [] if NO_EXCLUSION else (prize_finetune.problems("reader_v3") if CORPUS == "prize" else holdout_exclusion.problems("reader_v3"))
         if problems:
             raise SystemExit("prize-sheet exclusion not ready (python3 -m utils."
                              + ("prize_finetune" if CORPUS == "prize" else "holdout_exclusion") + "):\n  " + "\n  ".join(problems[:10]))
@@ -387,12 +494,12 @@ def main() -> None:
             path = config(args.smoke)
             settings = json.loads(path.read_text())
             print(f"[dry-run] corpus {CORPUS}: {sum(len(d['segments']) for d in settings['datasets'])} segments, batch {settings['batch_size']}, "
-                  f"counts {settings['fixed_scroll_prior']['target_batch_counts']}, {settings['num_iterations']} steps, "
+                  f"counts {settings['fixed_scroll_prior']['target_batch_counts']}, {settings['num_iterations']}-step schedule stopped at {STOP_STEP}, "
                   f"save every {settings['save_every']}, out {settings['out_dir']}")
             return
         final = train(args.smoke)
     if final is not None:
-        print(f"\n[done] reader-v3 {CORPUS} fine-tune ({'smoke, 20' if args.smoke else str(STEPS)} steps): {final}", flush=True)
+        print(f"\n[done] reader-v3 {CORPUS} fine-tune ({'smoke, 20' if args.smoke else f'{STEPS}-step schedule, stopped at {STOP_STEP}'} steps): {final}", flush=True)
         if not args.smoke and CORPUS == mix6.FINETUNE_CORPUS:
             print(mix6.describe_selection(), flush=True)
 

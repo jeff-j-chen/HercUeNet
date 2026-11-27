@@ -79,3 +79,22 @@ logs_*/
 /tifxyz/fiber_only_abf2_20261029c_flatboi_m28/
 /tifxyz/fiber_only_abf2_20261029c_flatboi_p28/
 /tifxyz/fiber_tps_20261028_flatboi/
+/tifxyz/PRIZESHEET_11_16/
+.venv-studio/
+studio-multiscroll/
+studio-multiscroll/repo
+studio-multiscroll/*
+/tifxyz/PRIZESHEET_11_17/
+/tifxyz/PRIZESHEET_11_17_2/
+# sealed in utils/tifxyz_0846A.tar.enc (python3 -m utils.seal_tifxyz): the prize sheet, the HerculeX exports and the 0846B prize sheets
+/tifxyz/PRIZESHEET_11_19_flatboi/
+/tifxyz/HerculeX_marks_export_0846A/
+/tifxyz/HerculeX_marks_export_0846B/
+/tifxyz/HerculeX_marks_export_0846B_blank/
+# the regenerated x export of 2026-11-21 (utils/assemble_herculex2.py; not sealed yet)
+/tifxyz/HerculeX_labels_0846A/
+/tifxyz/HerculeX_labels_0846B/
+/tifxyz/new_x.zip
+/tifxyz/PRIZESHEET_B_11_18_abf_flatboi_flatboi/
+/tifxyz/PRIZESHEET_B_2/
+*.whl
